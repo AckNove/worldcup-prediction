@@ -1,0 +1,3864 @@
+#!/usr/bin/env python3
+"""
+波胆教父 · 2026世界杯AI量化预测系统
+=====================================
+Zero-dependency web server. Only needs Python 3.8+.
+
+Usage:
+    python server.py              # Start on port 8000 (offline)
+    python server.py 8080         # Start on port 8080
+    python server.py YOUR_API_KEY # Start with API-Football key
+    python server.py 8080 YOUR_API_KEY
+
+Then open http://localhost:8000 in your browser.
+"""
+import sys
+import os
+import json
+import math
+import time
+import uuid
+import hashlib
+import html
+import http.server
+import socketserver
+import urllib.parse
+from pathlib import Path
+from typing import Optional
+
+# Add parent directory for our prediction modules
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Import our prediction engine
+from src.poisson_model import PoissonPredictor, MatchStage
+from src.team_data import WORLD_CUP_TEAMS_2026, GROUP_STAGE_MATCHUPS, KNOCKOUT_MATCHUPS, GROUP_MEMBERS, get_team
+from src.simulator import WorldCupSimulator
+from src.data_manager import DataManager, get_data_manager
+from src.report_generator import ReportGenerator
+from src.scheduler import get_scheduler, start_scheduler
+from src.team_integrator import get_team_integrator
+
+# Import 2026 World Cup schedule from JSON (graceful fallback if file missing)
+SCHEDULE_FILE = os.path.join(os.path.dirname(__file__), 'data', 'schedule.json')
+
+def load_schedule():
+    """Load schedule from JSON file, fallback to wc2026_schedule.py."""
+    schedule = []
+    
+    if os.path.exists(SCHEDULE_FILE):
+        try:
+            with open(SCHEDULE_FILE, 'r', encoding='utf-8') as f:
+                schedule = json.load(f)
+            print(f"  Schedule loaded from JSON: {len(schedule)} matches")
+        except Exception as e:
+            print(f"  Error loading schedule.json: {e}")
+            schedule = []
+    
+    # If JSON not available, fallback to wc2026_schedule.py
+    if not schedule:
+        try:
+            from wc2026_schedule import ALL_MATCHES, WC2026_SCHEDULE, KNOCKOUT_SCHEDULE
+            schedule = ALL_MATCHES
+            print(f"  Schedule loaded from wc2026_schedule.py: {len(schedule)} matches")
+        except Exception as _e:
+            print(f"  Schedule not available: {_e}")
+            return []
+    
+    return schedule
+
+# Load schedule at startup (Chinese names added later after tcn is defined)
+ALL_MATCHES = load_schedule()
+
+predictor = PoissonPredictor(home_advantage=1.05)
+
+# Run Monte Carlo champion odds at startup
+print("  Running Monte Carlo simulation for champion odds...")
+simulator = WorldCupSimulator(n_simulations=5000)
+CHAMPION_ODDS = simulator.simulate_tournament()
+print(f"  Champion odds computed for {len(CHAMPION_ODDS)} teams")
+
+# Initialize data manager for dynamic team updates
+data_dir = os.path.join(os.path.dirname(__file__), 'data')
+data_manager = get_data_manager(data_dir)
+print("  Data manager initialized for dynamic team updates")
+
+# API key from command line arg, env var, or pre-configured default in api_client.py
+API_FOOTBALL_KEY = ""
+if len(sys.argv) > 2:
+    API_FOOTBALL_KEY = sys.argv[2]
+elif len(sys.argv) > 1 and sys.argv[1].isdigit() is False:
+    API_FOOTBALL_KEY = sys.argv[1]
+elif os.environ.get("API_FOOTBALL_KEY"):
+    API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "")
+
+from src.api_client import get_api_client
+if API_FOOTBALL_KEY:
+    get_api_client(API_FOOTBALL_KEY)
+    print("  API-Football key configured from " + ("env" if os.environ.get("API_FOOTBALL_KEY") else "command line"))
+elif get_api_client().is_configured():
+    print("  API-Football key loaded from api_client.py default")
+
+# Get port
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].lstrip('-').isdigit() else 8000
+HOST = "0.0.0.0"
+
+# Initialize scheduler for periodic data updates
+scheduler = start_scheduler(data_manager, API_FOOTBALL_KEY)
+
+# Initialize team integrator (player data -> team strength)
+integrator = get_team_integrator(data_manager)
+
+# ============================================================================
+# Team Name Localization: English -> Chinese + Flag Emoji
+# ============================================================================
+TEAM_NAME_MAP = {
+    # Group A
+    "Mexico": "墨西哥🇲🇽", "South Korea": "韩国🇰🇷", "South Africa": "南非🇿🇦", "Czechia": "捷克🇨🇿", "Czech Republic": "捷克🇨🇿",
+    # Group B
+    "Canada": "加拿大🇨🇦", "Switzerland": "瑞士🇨🇭", "Qatar": "卡塔尔🇶🇦", "Bosnia and Herzegovina": "波黑🇧🇦", "Bosnia & Herzegovina": "波黑🇧🇦",
+    # Group C
+    "Brazil": "巴西🇧🇷", "Morocco": "摩洛哥🇲🇦", "Scotland": "苏格兰🏴󠁧󠁢󠁳󠁣󠁴󠁿", "Haiti": "海地🇭🇹",
+    # Group D
+    "USA": "美国🇺🇸", "Australia": "澳大利亚🇦🇺", "Paraguay": "巴拉圭🇵🇾", "Turkiye": "土耳其🇹🇷", "Türkiye": "土耳其🇹🇷",
+    # Group E
+    "Germany": "德国🇩🇪", "Ecuador": "厄瓜多尔🇪🇨", "Ivory Coast": "科特迪瓦🇨🇮",
+    # Group F
+    "Netherlands": "荷兰🇳🇱", "Japan": "日本🇯🇵", "Tunisia": "突尼斯🇹🇳", "Sweden": "瑞典🇸🇪",
+    # Group G
+    "Belgium": "比利时🇧🇪", "Iran": "伊朗🇮🇷", "Egypt": "埃及🇪🇬", "New Zealand": "新西兰🇳🇿",
+    # Group H
+    "Spain": "西班牙🇪🇸", "Uruguay": "乌拉圭🇺🇾", "Saudi Arabia": "沙特阿拉伯🇸🇦", "Cape Verde": "佛得角🇨🇻", "Cape Verde Islands": "佛得角🇨🇻",
+    # Group I
+    "France": "法国🇫🇷", "Senegal": "塞内加尔🇸🇳", "Norway": "挪威🇳🇴", "Iraq": "伊拉克🇮🇶",
+    # Group J
+    "Argentina": "阿根廷🇦🇷", "Austria": "奥地利🇦🇹", "Algeria": "阿尔及利亚🇩🇿", "Jordan": "约旦🇯🇴",
+    # Group K
+    "Portugal": "葡萄牙🇵🇹", "Colombia": "哥伦比亚🇨🇴", "Uzbekistan": "乌兹别克斯坦🇺🇿", "DR Congo": "刚果(金)🇨🇩", "Congo DR": "刚果(金)🇨🇩",
+    # Group L
+    "England": "英格兰🏴󠁧󠁢󠁥󠁮󠁧󠁿", "Croatia": "克罗地亚🇭🇷", "Ghana": "加纳🇬🇭", "Panama": "巴拿马🇵🇦",
+    # Non-WC teams (warmup opponents)
+    "Trinidad and Tobago": "特立尼达和多巴哥🇹🇹", "Iceland": "冰岛🇮🇸", "Russia": "俄罗斯🇷🇺",
+    "Finland": "芬兰🇫🇮", "Northern Ireland": "北爱尔兰🏴󠁧󠁢󠁮󠁧󠁿", "Nicaragua": "尼加拉瓜🇳🇮",
+    "Kosovo": "科索沃🇽🇰", "Guatemala": "危地马拉🇬🇹", "Sudan": "苏丹🇸🇩",
+    "Burundi": "布隆迪🇧🇮", "Curaçao": "库拉索🇨🇼", "Costa Rica": "哥斯达黎加🇨🇷",
+    "Bermuda": "百慕大🇧🇲", "Bolivia": "玻利维亚🇧🇴", "Chile": "智利🇨🇱",
+    "Venezuela": "委内瑞拉🇻🇪", "Peru": "秘鲁🇵🇪", "Denmark": "丹麦🇩🇰",
+    "Greece": "希腊🇬🇷", "Slovenia": "斯洛文尼亚🇸🇮", "Honduras": "洪都拉斯🇭🇳",
+    "Dominican Republic": "多米尼加🇩🇴", "El Salvador": "萨尔瓦多🇸🇻", "Jamaica": "牙买加🇯🇲",
+    "Albania": "阿尔巴尼亚🇦🇱", "Serbia": "塞尔维亚🇷🇸", "Mali": "马里🇲🇱",
+    "Madagascar": "马达加斯加🇲🇬", "Gambia": "冈比亚🇬🇲", "Andorra": "安道尔🇦🇩",
+    "Aruba": "阿鲁巴🇦🇼", "Comoros": "科摩罗🇰🇲", "Puerto Rico": "波多黎各🇵🇷",
+    "Rep. Of Ireland": "爱尔兰🇮🇪", "Ireland": "爱尔兰🇮🇪", "FYR Macedonia": "北马其顿🇲🇰", "North Macedonia": "北马其顿🇲🇰",
+}
+
+def tcn(name: str) -> str:
+    """Convert English team name to Chinese + flag emoji."""
+    return TEAM_NAME_MAP.get(name, name)
+
+# Add Chinese team names + FIFA rankings + group to schedule data
+for _m in ALL_MATCHES:
+    _m["home_cn"] = tcn(_m.get("home", ""))
+    _m["away_cn"] = tcn(_m.get("away", ""))
+    home_name = _m.get("home", "")
+    away_name = _m.get("away", "")
+    # FIFA ranking
+    ht = WORLD_CUP_TEAMS_2026.get(home_name)
+    at = WORLD_CUP_TEAMS_2026.get(away_name)
+    _m["home_rank"] = ht.fifa_ranking if ht else "?"
+    _m["away_rank"] = at.fifa_ranking if at else "?"
+    # Group
+    group = ""
+    for gl, members in GROUP_MEMBERS.items():
+        if home_name in members:
+            group = gl + "组"
+            break
+    _m["group"] = group if group else _m.get("round", "")
+
+# ============================================================================
+# Templates (embedded HTML strings)
+# ============================================================================
+
+BASE_HTML = r"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+:root{{
+    --bg:#f5f7f0;--card:#ffffff;--card-hover:#f0f5f0;--border:#d0e0d0;
+    --text:#1a2e1a;--dim:#5a6e5a;--accent:#2D8A3E;--accent2:#C4A035;
+    --grad:linear-gradient(135deg,#C4A035,#2D8A3E);
+    --success:#00b87a;--danger:#e74c3c;--warn:#f0a500;
+    --shadow:0 2px 12px rgba(0,40,0,.08);
+}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}}
+a{{color:var(--accent2);text-decoration:none}}
+a:hover{{opacity:.8}}
+.nav{{background:rgba(255,255,255,.96);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;backdrop-filter:blur(10px);box-shadow:var(--shadow)}}
+.nav-inner{{max-width:1200px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:60px}}
+.nav-logo{{font-size:1.3em;font-weight:700;color:#1a2e1a!important;white-space:nowrap}}
+.nav-links{{display:flex;align-items:center;gap:20px;font-size:.9em}}
+.nav-links a{{color:#5a6e5a;transition:color .2s}}
+.nav-links a:hover,.nav-links a.active{{color:#1a2e1a}}
+.badge-pro{{background:var(--grad);padding:2px 10px;border-radius:10px;font-size:.75em;font-weight:600;color:#fff}}
+.container{{max-width:1200px;margin:0 auto;padding:20px}}
+.hero{{text-align:center;padding:60px 20px 40px;background:linear-gradient(180deg,#f0fbe8 0%,var(--bg) 100%)}}
+.hero-title{{font-size:2.8em;line-height:1.2;margin-bottom:16px}}
+.grad-text{{background:var(--grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent}}
+.hero-sub{{color:var(--dim);font-size:1.1em;margin-bottom:30px}}
+.hero-cta{{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}}
+.btn{{display:inline-block;padding:14px 32px;border-radius:30px;font-size:1em;font-weight:600;cursor:pointer;transition:all .3s;border:none;text-align:center}}
+.btn-primary{{background:var(--grad);color:#fff;box-shadow:var(--shadow)}}
+.btn-primary:hover{{transform:translateY(-2px);box-shadow:0 6px 20px rgba(45,138,62,.25)}}
+.btn-outline{{background:transparent;color:var(--text);border:1px solid var(--border)}}
+.btn-outline:hover{{border-color:var(--accent);color:var(--accent)}}
+.btn-sm{{padding:8px 20px;font-size:.85em}}
+.section{{margin-bottom:48px}}
+.section-title{{font-size:1.5em;margin-bottom:20px;padding-left:12px;border-left:4px solid var(--accent)}}
+.section-footer{{text-align:center;margin-top:16px}}
+.card{{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;transition:all .3s;box-shadow:var(--shadow)}}
+.card:hover{{box-shadow:0 6px 20px rgba(0,40,0,.12);transform:translateY(-2px)}}
+.match-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px}}
+.match-teams{{display:flex;align-items:center;justify-content:space-between;gap:12px}}
+.ti{{display:flex;align-items:center;gap:8px}}
+.ti-right{{justify-content:flex-end}}
+.tbadge{{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:.9em}}
+.tname{{font-weight:600;font-size:.95em}}
+.rank{{color:var(--dim);font-size:.8em}}
+.score-display{{text-align:center;min-width:60px}}
+.score{{font-size:1.8em;font-weight:700;background:var(--grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent}}
+.score.blur{{filter:blur(5px);-webkit-text-fill-color:var(--dim)}}
+.match-probs{{margin-top:12px;display:grid;grid-template-columns:repeat(6,auto);gap:4px 8px;align-items:center}}
+.plabel{{font-size:.78em;color:var(--dim);text-align:right}}
+.pbar{{height:6px;background:var(--border);border-radius:3px;overflow:hidden}}
+.pfill{{height:100%;border-radius:3px}}
+.phome{{background:var(--accent2)}}
+.pdraw{{background:var(--warn)}}
+.paway{{background:var(--danger)}}
+.preview-cta{{margin-top:12px;text-align:center;padding:8px;background:rgba(123,47,247,.1);border-radius:8px;font-size:.85em;color:var(--accent2)}}
+.champ-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px}}
+.champ-card{{display:flex;align-items:center;gap:12px;padding:14px 18px;background:var(--card);border:1px solid var(--border);border-radius:12px;cursor:pointer;transition:all .3s;box-shadow:var(--shadow)}}
+.champ-card:hover{{background:var(--card-hover);transform:translateY(-2px)}}
+.champ-rank{{font-size:1.2em;font-weight:700;color:var(--accent);width:30px}}
+.champ-info{{flex:1}}
+.champ-name{{font-weight:600;font-size:.95em}}
+.champ-bar-bg{{height:8px;background:var(--border);border-radius:4px;overflow:hidden;margin-top:4px}}
+.champ-bar{{height:100%;border-radius:4px;background:var(--grad)}}
+.champ-prob{{font-weight:700;color:var(--accent2);font-size:1em;min-width:50px;text-align:right}}
+.groups-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:20px}}
+.group-card{{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;box-shadow:var(--shadow)}}
+.group-title{{font-size:1.2em;margin-bottom:12px;color:var(--accent2)}}
+.gmatch{{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:rgba(255,255,255,.02);border-radius:6px;font-size:.9em;cursor:pointer;margin-bottom:4px}}
+.gmatch:hover{{background:rgba(255,255,255,.05)}}
+.footer{{text-align:center;padding:40px 20px;color:var(--dim);font-size:.85em;border-top:1px solid var(--border);margin-top:60px}}
+.login-box{{max-width:400px;margin:60px auto;padding:40px;background:var(--card);border:1px solid var(--border);border-radius:12px}}
+.form-group{{margin-bottom:16px}}
+.form-group label{{display:block;margin-bottom:6px;font-size:.9em;color:var(--dim)}}
+.form-input{{width:100%;padding:12px;border-radius:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);font-size:1em}}
+.form-input:focus{{outline:none;border-color:var(--accent)}}
+.page-header{{text-align:center;padding:30px 0}}
+.page-header h1{{font-size:2em}}
+.page-header p{{color:var(--dim);margin-top:8px}}
+.sg{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}}
+.sc{{background:var(--card);padding:16px;border-radius:8px;text-align:center;border:1px solid var(--border)}}
+.sl{{font-size:.85em;color:var(--dim)}}
+.sv{{font-size:1.3em;font-weight:700;margin-top:4px}}
+.pricing-card{{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:32px;text-align:center;max-width:400px;margin:0 auto}}
+.pricing-card.featured{{border-color:var(--accent);box-shadow:0 0 30px rgba(123,47,247,.2)}}
+.pricing-price{{font-size:2.5em;font-weight:700;background:var(--grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin:16px 0}}
+.pricing-features{{list-style:none;margin:20px 0}}
+.pricing-features li{{padding:8px 0;border-bottom:1px solid var(--border);font-size:.9em}}
+@media(max-width:768px){{.hero-title{{font-size:1.8em}}.match-grid{{grid-template-columns:1fr}}.sg{{grid-template-columns:1fr}}
+.nav-inner{{height:auto;flex-direction:column;padding:12px 16px;gap:8px}}
+.nav-links{{flex-wrap:wrap;gap:8px 12px;font-size:.82em;justify-content:center}}
+.container{{padding:12px 10px}}
+.hero{{padding:36px 12px 24px}}
+.hero-sub{{font-size:.92em}}
+.section-title{{font-size:1.15em}}
+.btn{{padding:11px 24px;font-size:.9em}}
+.cal-date-card{{flex:0 0 50px;padding:6px 3px;border-radius:10px}}
+.cal-weekday{{font-size:.55em}}
+.cal-daynum{{font-size:.92em}}
+.cal-match-card{{padding:10px}}
+.footer{{text-size:.78em;text-align:center;line-height:1.6}}
+.mc-nav{{gap:6px}}
+.mc-nav-item{{padding:5px 10px;font-size:.76em}}
+.ta-item{{padding:6px 0}}
+.ta-label{{font-size:.7em}}
+.ta-value{{font-size:.76em}}
+.wu-hero h1{{font-size:1.35em}}
+.wu-predict-grid{{grid-template-columns:1fr 1fr!important}}
+.wu-predict-item{{padding:8px 4px}}
+}}
+/* ===== 赛程日历模块（参考竞品风格）===== */
+.cal-date-bar{{display:flex;gap:10px;overflow-x:auto;padding:4px 0 12px;margin-bottom:8px;scrollbar-width:none}}
+.cal-date-bar::-webkit-scrollbar{{display:none}}
+.cal-date-card{{flex:0 0 60px;text-align:center;padding:10px 6px;background:var(--card);border:1.5px solid var(--border);border-radius:14px;cursor:pointer;transition:all .25s;user-select:none}}
+.cal-date-card:hover{{border-color:var(--accent);transform:translateY(-2px)}}
+.cal-date-card.cal-active{{border-color:var(--accent);box-shadow:0 2px 12px rgba(45,138,62,.15)}}
+.cal-weekday{{font-size:.68em;color:var(--dim);margin-bottom:2px}}
+.cal-daynum{{font-size:1.3em;font-weight:700;color:var(--text);line-height:1.2}}
+.cal-dot{{display:block;width:5px;height:5px;background:var(--accent);border-radius:50%;margin:4px auto 0}}
+.cal-match-card{{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:16px;margin-bottom:14px;box-shadow:0 2px 12px rgba(0,40,0,.06);transition:all .25s}}
+.cal-match-card:hover{{box-shadow:0 6px 24px rgba(0,40,0,.1);transform:translateY(-1px)}}
+.cal-match-header{{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}}
+.cal-group{{font-size:.78em;color:var(--dim);font-weight:500}}
+.cal-status{{font-size:.72em;padding:3px 10px;border-radius:10px;font-weight:600}}
+.cal-status.status-upcoming{{background:rgba(245,158,11,.12);color:#d97706}}
+.cal-status.status-finished{{background:rgba(16,185,129,.12);color:#059669}}
+.cal-match-body{{display:flex;align-items:center;justify-content:space-between;gap:8px}}
+.cal-team{{flex:1;display:flex;flex-direction:column;gap:3px}}
+.cal-team-left{{align-items:flex-start}}
+.cal-team-right{{align-items:flex-end}}
+.cal-flag{{font-size:1.35em;font-weight:700;color:var(--text);line-height:1.3}}
+.cal-rank{{font-size:.72em;color:#9ca3af;font-weight:500}}
+.cal-match-center{{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:70px}}
+.cal-match-time{{font-size:.78em;color:#f97316;font-weight:600}}
+.cal-vs{{font-size:.85em;color:#9ca3af;font-weight:500;letter-spacing:1px}}
+.cal-score-num{{font-size:1.5em;font-weight:800;color:var(--accent)}}
+.cal-predict-btn{{display:block;width:100%;margin-top:14px;padding:10px 0;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;text-align:center;border-radius:12px;font-size:.95em;font-weight:600;text-decoration:none;transition:all .2s;border:none;cursor:pointer}}
+.cal-predict-btn:hover{{transform:translateY(-1px);box-shadow:0 4px 16px rgba(34,197,94,.3)}}
+.cal-btn-grey{{background:linear-gradient(135deg,#9ca3af,#6b7280)!important}}
+.cal-venue-label{{font-size:.7em;color:#9ca3af;margin-top:2px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.cal-cancelled-text{{font-size:.9em;color:#9ca3af;font-weight:600;letter-spacing:1px}}
+.status-cancelled{{background:#e5e7eb;color:#6b7280!important}}
+/* ===== 热身赛专属样式 ===== */
+.wu-hero{{background:linear-gradient(135deg,#1a2e1a 0%,#2D8A3E 50%,#C4A035 100%);color:#fff;text-align:center;padding:48px 24px 36px;border-radius:20px;margin-bottom:28px;position:relative;overflow:hidden}}
+.wu-hero::before{{content:'';position:absolute;top:-50%;right:-20%;width:400px;height:400px;background:rgba(255,255,255,.05);border-radius:50%}}
+.wu-hero::after{{content:'';position:absolute;bottom:-60%;left:-10%;width:300px;height:300px;background:rgba(255,255,255,.03);border-radius:50%}}
+.wu-hero h1{{font-size:2.2em;margin-bottom:8px;position:relative;z-index:1}}
+.wu-hero p{{opacity:.85;font-size:1.05em;position:relative;z-index:1}}
+.wu-stats{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:20px;position:relative;z-index:1}}
+.wu-stat{{background:rgba(255,255,255,.12);border-radius:12px;padding:14px 10px;backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,.1)}}
+.wu-stat-num{{font-size:1.6em;font-weight:800}}
+.wu-stat-label{{font-size:.75em;opacity:.75;margin-top:2px}}
+.wu-filter{{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;align-items:center}}
+.wu-filter-btn{{padding:8px 18px;border-radius:20px;font-size:.85em;font-weight:600;border:1.5px solid var(--border);background:var(--card);color:var(--dim);cursor:pointer;transition:all .25s}}
+.wu-filter-btn:hover{{border-color:var(--accent);color:var(--accent)}}
+.wu-filter-btn.wu-filter-active{{background:var(--accent);color:#fff;border-color:var(--accent);box-shadow:0 2px 12px rgba(45,138,62,.2)}}
+.wu-section-title{{font-size:1.1em;font-weight:700;color:var(--text);margin:20px 0 12px;padding-left:10px;border-left:3px solid var(--accent2);display:flex;align-items:center;gap:8px}}
+.wu-date-tag{{font-size:.8em;color:var(--dim);font-weight:400}}
+.wu-card{{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px;margin-bottom:12px;transition:all .3s;box-shadow:0 2px 10px rgba(0,40,0,.05)}}
+.wu-card:hover{{box-shadow:0 6px 24px rgba(0,40,0,.1);transform:translateY(-1px)}}
+.wu-card-head{{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}}
+.wu-card-date{{font-size:.78em;color:var(--dim);font-weight:500}}
+.wu-card-badge{{font-size:.7em;padding:3px 10px;border-radius:10px;font-weight:600}}
+.wu-badge-done{{background:rgba(16,185,129,.1);color:#059669}}
+.wu-badge-soon{{background:rgba(245,158,11,.1);color:#d97706}}
+.wu-badge-live{{background:rgba(239,68,68,.1);color:#ef4444;animation:wu-pulse 2s infinite}}
+@keyframes wu-pulse{{0%,100%{{opacity:1}}50%{{opacity:.5}}}}
+.wu-card-body{{display:flex;align-items:center;justify-content:space-between;gap:10px}}
+.wu-team{{flex:1;display:flex;flex-direction:column;gap:2px}}
+.wu-team-l{{align-items:flex-start}}
+.wu-team-r{{align-items:flex-end;text-align:right}}
+.wu-team-name{{font-size:1.2em;font-weight:700;color:var(--text);line-height:1.3}}
+.wu-team-sub{{font-size:.72em;color:#9ca3af}}
+.wu-center{{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:72px}}
+.wu-vs{{font-size:.9em;color:#b0b8b0;font-weight:600;letter-spacing:2px}}
+.wu-score{{font-size:1.6em;font-weight:800}}
+.wu-score-home{{color:var(--accent)}}
+.wu-score-dash{{color:#9ca3af;margin:0 2px}}
+.wu-score-away{{color:var(--accent2)}}
+.wu-time{{font-size:.78em;color:#9ca3af}}
+.wu-venue{{font-size:.72em;color:#9ca3af;margin-top:2px}}
+.wu-predict{{margin-top:14px;background:linear-gradient(135deg,rgba(45,138,62,.06),rgba(196,160,53,.06));border-radius:14px;padding:16px;border:1px solid rgba(45,138,62,.12)}}
+.wu-predict-title{{font-size:.82em;font-weight:700;color:var(--accent);margin-bottom:10px;display:flex;align-items:center;gap:6px}}
+.wu-predict-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px}}
+.wu-predict-item{{background:var(--bg);border-radius:10px;padding:10px;text-align:center}}
+.wu-predict-label{{font-size:.68em;color:var(--dim);margin-bottom:3px}}
+.wu-predict-value{{font-size:1.05em;font-weight:700;color:var(--text)}}
+.wu-predict-rec{{font-size:.78em;color:var(--accent2);font-weight:600;padding:6px 0;border-top:1px solid rgba(45,138,62,.1);margin-top:4px}}
+.wu-scores-list{{margin-top:6px}}
+.wu-score-row{{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:.82em}}
+.wu-score-row:last-child{{border-bottom:none}}
+.wu-score-prob{{color:var(--accent2);font-weight:600;min-width:50px;text-align:right}}
+.wu-empty{{text-align:center;padding:50px 20px;color:var(--dim);font-size:.95em}}
+.wu-empty-icon{{font-size:3em;margin-bottom:12px;opacity:.5}}
+.wu-cta-row{{text-align:center;margin:24px 0;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}}
+@media(max-width:768px){{.wu-hero{{padding:32px 16px 24px;border-radius:14px}}.wu-hero h1{{font-size:1.6em}}.wu-stats{{grid-template-columns:repeat(3,1fr);gap:8px}}.wu-stat{{padding:10px 6px}}.wu-stat-num{{font-size:1.2em}}.wu-card{{padding:14px}}.wu-team-name{{font-size:1em}}}}
+
+/* ===== 赛事中心优化布局 ===== */
+.mc-nav{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:14px;overflow-x:auto}}
+.mc-nav-item{{padding:6px 16px;border-radius:20px;font-size:.82em;font-weight:600;text-decoration:none;white-space:nowrap;border:1.5px solid transparent;transition:all .2s}}
+.mc-nav-item:hover{{transform:translateY(-1px);box-shadow:0 2px 8px rgba(0,0,0,.08)}}
+.mc-section{{margin-bottom:32px}}
+.mc-header{{display:flex;align-items:center;gap:14px;margin-bottom:16px;flex-wrap:wrap}}
+.mc-header-left{{display:flex;align-items:center;gap:8px}}
+.mc-group-badge{{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1em;font-weight:800}}
+.mc-group-title{{font-size:1.35em;font-weight:700;color:var(--text)}}
+.mc-members{{display:flex;flex-wrap:wrap;gap:6px;flex:1}}
+.mc-list{{display:flex;flex-direction:column;gap:10px}}
+.mc-card{{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;transition:all .25s}}
+.mc-card:hover{{box-shadow:0 4px 20px rgba(0,40,0,.07);transform:translateY(-1px)}}
+.mc-top{{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}}
+.mc-round{{font-size:.72em;color:var(--dim);background:var(--bg);padding:3px 10px;border-radius:10px;font-weight:500}}
+.mc-status-dot{{width:8px;height:8px;border-radius:50%;background:var(--accent2)}}
+.mc-teams{{display:flex;align-items:center;justify-content:space-between;gap:12px}}
+.mc-team-mc{{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}}
+.mc-team-mc.mc-home{{align-items:flex-start}}
+.mc-team-mc.mc-away{{align-items:flex-end;text-align:right}}
+.mc-name{{font-size:1.05em;font-weight:700;color:var(--text);line-height:1.3}}
+.mc-rank{{font-size:.7em;color:#9ca3af}}
+.mc-vs-box{{display:flex;align-items:center;justify-content:center;min-width:64px;padding:0 4px}}
+.mc-actions{{display:flex;gap:8px;margin-top:12px}}
+.mc-btn{{flex:1;padding:7px 0;text-align:center;border-radius:10px;font-size:.8em;font-weight:600;text-decoration:none;transition:all .2s}}
+.mc-btn-view{{background:var(--accent);color:#fff!important}}
+.mc-btn-view:hover{{filter:brightness(1.1)}}
+.mc-btn-buy{{background:linear-gradient(135deg,#f59e0b,#d97706)!important;color:#fff!important}}
+.mc-btn-buy:hover{{filter:brightness(1.1)}}
+@media(max-width:768px){{.mc-nav{{padding:10px}}.mc-card{{padding:12px}}.mc-name{{font-size:.95em}}.mc-vs-box{{min-width:48px}}}}
+/* ===== 球队文字分析样式 ===== */
+.ta-grid{{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:4px}}
+.ta-team-block{{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px;transition:box-shadow .3s}}
+.ta-team-block:hover{{box-shadow:0 4px 20px rgba(0,40,0,.08)}}
+.ta-team-title{{font-size:1.05em;font-weight:800;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid var(--border);text-align:center}}
+.ta-item{{display:flex;flex-direction:column;padding:8px 0;border-bottom:1px dashed rgba(128,128,128,.15)}}
+.ta-item.ta-last{{border-bottom:none}}
+.ta-label{{font-size:.75em;color:var(--dim);font-weight:600;margin-bottom:3px;display:flex;align-items:center;gap:4px}}
+.ta-value{{font-size:.82em;color:var(--text);line-height:1.5}}
+.ta-positive{{color:var(--accent)!important;font-weight:600}}
+.ta-negative{{color:#d97706!important;font-weight:500}}
+@media(max-width:768px){{.ta-grid{{grid-template-columns:1fr;gap:12px}}.ta-team-block{{padding:14px}}}}
+</style>
+<meta name="description" content="波胆教父 · 2026世界杯AI量化预测系统，基于泊松分布、蒙特卡洛模拟和贝叶斯修正，提供比分预测、夺冠概率和深度分析报告。">
+<meta name="keywords" content="世界杯预测,2026世界杯,比分预测,足球预测,波胆,AI预测,泊松分布">
+<meta property="og:title" content="波胆教父 · 2026世界杯AI量化预测系统">
+<meta property="og:description" content="基于金融工程技术的世界杯AI量化预测，提供104场比赛完整分析报告">
+<meta property="og:type" content="website">
+<link rel="canonical" href="https://worldcup-prediction-production-ec11.up.railway.app/">
+
+    <style>
+    /* 日历模块样式 */
+    #schedule-calendar {{
+        margin-bottom: 32px;
+    }}
+    #schedule-calendar .section-title {{
+        margin-bottom: 16px;
+    }}
+    /* 日期按钮样式 */
+    .calendar-date-btn {{
+        transition: all 0.3s ease;
+        background: var(--card);
+        border: 1px solid var(--border);
+        color: var(--text);
+    }}
+    .calendar-date-btn:hover {{
+        background: var(--accent);
+        color: #fff;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(45,138,62,0.2);
+    }}
+    .calendar-date-btn.active {{
+        background: var(--accent);
+        color: #fff;
+    }}
+    /* 比赛卡片样式 */
+    .match-card {{
+        transition: all 0.3s ease;
+    }}
+    .match-card:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0,40,0,0.12);
+    }}
+    </style>
+    </head>
+<body>
+<div class="nav"><div class="nav-inner">
+<a href="/" class="nav-logo">波胆教父</a>
+<div class="nav-links">
+<a href="/" class="{nav_home}">首页</a>
+<a href="/model" class="{nav_model}">量化模型</a>
+<a href="/matches" class="{nav_matches}">赛事中心</a>
+<a href="/warmup" class="{nav_warmup}">热身赛</a>
+<a href="/pricing" class="{nav_price}">购买</a>
+{multibet_link}{admin_link}{login_link}
+</div></div></div>
+<!-- 全局搜索栏 -->
+<style>.gs-bar input{{width:100%;padding:13px 18px 13px 44px;border:2px solid var(--border);border-radius:16px;font-size:.93em;outline:none;transition:border-color .25s;background:var(--card);color:var(--text);box-sizing:border-box;font-family:inherit}}.gs-bar input:focus{{border-color:var(--accent)}}.gs-dd{{display:none;position:absolute;top:calc(100% + 6px);left:20px;right:20px;background:var(--card);border:2px solid var(--accent);border-radius:14px;max-height:380px;overflow-y:auto;z-index:200;box-shadow:0 8px 32px rgba(0,40,0,.12)}}.gs-item{{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--text);transition:background .15s}}.gs-item:hover{{background:var(--bg)}}</style>
+<div class="gs-bar" style="max-width:1200px;margin:0 auto 16px;padding:0 20px;position:relative">
+<input type="text" id="team-search-input" placeholder="搜索球队名称或球员名..." onfocus="this.style.borderColor='var(--accent)'" onblur="setTimeout(function(){{document.getElementById('search-dd').style.display='none'}},200)" oninput="handleSearch(this.value)" />
+<span style="position:absolute;left:16px;top:50%;transform:translateY(-50%);font-size:1.1em;pointer-events:none;opacity:.5">🔍</span>
+<div id="search-dd" class="gs-dd"></div>
+</div>
+<div class="container">
+{content}
+</div>
+<div class="footer"><p>波胆教父 · 2026世界杯AI量化预测系统 | 泊松分布 · 蒙特卡洛 · 贝叶斯修正 · NLP情感分析</p><p style="font-size:.8em;margin-top:4px">预测结果仅供参考，请理性购彩</p></div>
+</body></html>"""
+
+
+def render_page(title, content, nav_active="", is_premium=False, username=None):
+    """Render a full page with navigation."""
+    nav_home = "active" if nav_active == "home" else ""
+    nav_model = "active" if nav_active == "model" else ""
+    nav_matches = "active" if nav_active == "matches" else ""
+    nav_warmup = "active" if nav_active == "warmup" else ""
+    nav_price = "active" if nav_active == "price" else ""
+
+    if is_premium:
+        badge = '<span class="badge-pro">PRO</span>'
+        logout = f'<span style="color:var(--dim);font-size:.85em">{username or ""}</span><a href="/logout">退出登录</a>'
+        login_link = f'{badge} {logout}'
+        multibet_link = '<a href="/multibet">多串一</a>'
+    else:
+        login_link = '<a href="/login">登录</a>'
+        multibet_link = ''
+
+    # Admin nav link
+    if username == "admin":
+        is_admin_active = "active" if nav_active == "admin" else ""
+        admin_link = f'<a href="/admin" class="{is_admin_active}">管理后台</a>'
+    else:
+        admin_link = ""
+
+    html_content = BASE_HTML.format(
+        title=title, content=content,
+        nav_home=nav_home, nav_model=nav_model,
+        nav_matches=nav_matches, nav_warmup=nav_warmup,
+        nav_price=nav_price,
+        login_link=login_link, admin_link=admin_link,
+        multibet_link=multibet_link
+    )
+
+    # Search JS: inject team search functionality
+    _search_js = '<script>' + ''.join([
+        '(function(){',
+        'var SD=[{n:"墨西哥",f:"🇲🇽",g:"A",u:"/match/Mexico/SouthAfrica"},{n:"韩国",f:"🇰🇷",g:"A",u:"#group-A"},{n:"南非",f:"🇿🇦",g:"A",u:"#group-A"},{n:"捷克",f:"🇨🇿",g:"A",u:"#group-A"},',
+        '{n:"加拿大",f:"🇨🇦",g:"B",u:"#group-B"},{n:"瑞士",f:"🇨🇭",g:"B",u:"#group-B"},{n:"卡塔尔",f:"🇶🇦",g:"B",u:"#group-B"},{n:"波黑",f:"🇧🇦",g:"B",u:"#group-B"},',
+        '{n:"巴西",f:"🇧🇷",g:"C",u:"#group-C"},{n:"摩洛哥",f:"🇲🇦",g:"C",u:"#group-C"},{n:"苏格兰",f:"🏴󠁧󠁢󠁳󠁣󠁴󠁿",g:"C",u:"#group-C"},{n:"海地",f:"🇭🇹",g:"C",u:"#group-C"},',
+        '{n:"美国",f:"🇺🇸",g:"D",u:"#group-D"},{n:"澳大利亚",f:"🇦🇺",g:"D",u:"#group-D"},{n:"巴拉圭",f:"🇵🇾",g:"D",u:"#group-D"},{n:"土耳其",f:"🇹🇷",g:"D",u:"#group-D"},',
+        '{n:"德国",f:"🇩🇪",g:"E",u:"#group-E"},{n:"厄瓜多尔",f:"🇪🇨",g:"E",u:"#group-E"},{n:"科特迪瓦",f:"🇨🇮",g:"E",u:"#group-E"},{n:"荷兰",f:"🇳🇱",g:"F",u:"#group-F"},',
+        '{n:"日本",f:"🇯🇵",g:"F",u:"#group-F"},{n:"突尼斯",f:"🇹🇳",g:"F",u:"#group-F"},{n:"瑞典",f:"🇸🇪",g:"F",u:"#group-F"},{n:"比利时",f:"🇧🇪",g:"G",u:"#group-G"},',
+        '{n:"伊朗",f:"🇮🇷",g:"G",u:"#group-G"},{n:"埃及",f:"🇪🇬",g:"G",u:"#group-G"},{n:"新西兰",f:"🇳🇿",g:"G",u:"#group-G"},{n:"西班牙",f:"🇪🇸",g:"H",u:"#group-H"},',
+        '{n:"乌拉圭",f:"🇺🇾",g:"H",u:"#group-H"},{n:"沙特阿拉伯",f:"🇸🇦",g:"H",u:"#group-H"},{n:"佛得角",f:"🇨🇻",g:"H",u:"#group-H"},{n:"法国",f:"🇫🇷",g:"I",u:"#group-I"},',
+        '{n:"塞内加尔",f:"🇸🇳",g:"I",u:"#group-I"},{n:"挪威",f:"🇳🇴",g:"I",u:"#group-I"},{n:"伊拉克",f:"🇮🇶",g:"I",u:"#group-I"},{n:"阿根廷",f:"🇦🇷",g:"J",u:"#group-J"},',
+        '{n:"奥地利",f:"🇦🇹",g:"J",u:"#group-J"},{n:"阿尔及利亚",f:"🇩🇿",g:"J",u:"#group-J"},{n:"约旦",f:"🇯🇴",g:"J",u:"#group-J"},{n:"葡萄牙",f:"🇵🇹",g:"K",u:"#group-K"},',
+        '{n:"哥伦比亚",f:"🇨🇴",g:"K",u:"#group-K"},{n:"乌兹别克斯坦",f:"🇺🇿",g:"K",u:"#group-K"},{n:"刚果金",f:"🇨🇩",g:"K",u:"#group-K"},',
+        '{n:"英格兰",f:"🏴󠁧󠁢󠁥󠁮󠁧󠁿",g:"L",u:"#group-L"},{n:"克罗地亚",f:"🇭🇷",g:"L",u:"#group-L"},{n:"加纳",f:"🇬🇭",g:"L",u:"#group-L"},{n:"巴拿马",f:"🇵🇦",g:"L",u:"#group-L"}];',
+        'window.handleSearch=function(q){q=(q||"").trim().toLowerCase();if(!q){document.getElementById("search-dd").style.display="none";return}',
+        'var r=SD.filter(function(t){return t.n.toLowerCase().indexOf(q)!==-1});var dd=document.getElementById("search-dd");',
+        'if(r.length===0){dd.style.display="block";dd.innerHTML=\'<div style="padding:20px;text-align:center;color:var(--dim)">未找到</div>\';return}dd.style.display="block";var h="";',
+        'r.slice(0,10).forEach(function(t){h+=\'<a href="\'+t.u+\'" class="gs-item"><span style="font-size:1.3em">\'+t.f+\'</span><div style="flex:1"><b>\'+t.n+\'</b><div style="font-size:.72em;color:var(--dim)">第\'+t.g+\'组</div></div>→</a>\'});',
+        'if(r.length>10)h+=\'<div style="padding:8px;text-align:center;font-size:.75em;color:var(--dim)">还有\'+(r.length-10)+\'个结果...</div>\';dd.innerHTML=h};',
+        'document.addEventListener("click",function(e){if(!e.target.closest(".gs-bar")){var d=document.getElementById("search-dd");if(d)d.style.display="none"}});',
+        '})();', '</script>'
+    ])
+
+    # Auto-refresh: inject countdown bar before </body></html>
+    _refresh_html = (
+        '<div id="auto-refresh-bar" style="position:fixed;bottom:0;left:0;right:0;'
+        'background:linear-gradient(135deg,#0B1A10,#132010);border-top:1px solid rgba(45,138,62,.2);'
+        'padding:6px 16px;display:flex;align-items:center;justify-content:center;gap:10px;'
+        'z-index:9999;font-size:.72em;color:#9ca3af">'
+        '<span style="color:#2D8A3E">🔄</span>'
+        '<span>数据每2小时自动同步 · 距下次刷新:</span>'
+        '<span id="refresh-countdown" style="color:#C4A035;font-weight:700;font-size:.85em">1:59:59</span>'
+        '<button onclick="location.reload()" '
+        'style="background:rgba(45,138,62,.15);border:1px solid rgba(45,138,62,.3);'
+        'color:#2D8A3E;padding:2px 12px;border-radius:10px;font-size:.75em;cursor:pointer;margin-left:4px">'
+        '立即刷新</button>'
+        '<button onclick="this.parentElement.style.display=\'none\'" '
+        'style="background:none;border:none;color:#666;cursor:pointer;padding:2px 4px;font-size:.9em">✕</button>'
+        '</div>'
+        '<script>'
+        '(function(){'
+        'var RI=7200;'
+        'var s=localStorage.getItem("wc_last_refresh");'
+        'var last=s?new Date(s).getTime():0;'
+        'var now=Date.now();'
+        'if(!s||isNaN(last)||now-last>RI*1000){'
+        'localStorage.setItem("wc_last_refresh",new Date().toISOString());'
+        'var rem=RI;'
+        '}else{'
+        'var el=Math.floor((now-last)/1000);'
+        'var rem=Math.max(0,RI-el);'
+        '}'
+        'function upd(){'
+        'rem--;'
+        'if(rem<0){'
+        'localStorage.setItem("wc_last_refresh",new Date().toISOString());'
+        'location.reload();return;'
+        '}'
+        'var h=Math.floor(rem/3600),m=Math.floor((rem%3600)/60),ss=rem%60;'
+        'document.getElementById("refresh-countdown").textContent='
+        'h+":"+String(m).padStart(2,"0")+":"+String(ss).padStart(2,"0");'
+        '}'
+        'upd();setInterval(upd,1000);'
+        '})();'
+        '</script>'
+    )
+    if '</body></html>' in html_content:
+        html_content = html_content.replace('</body></html>', _refresh_html + _search_js + '</body></html>')
+
+    return html_content
+
+
+# ============================================================================
+# Prediction Data
+# ============================================================================
+
+def get_all_predictions():
+    """Get all predictions (group + knockout)."""
+    results = []
+    for home_name, away_name, rn in GROUP_STAGE_MATCHUPS:
+        home = data_manager.get_dynamic_team(home_name, use_player_data=True)
+        away = data_manager.get_dynamic_team(away_name, use_player_data=True)
+        result = predictor.predict(home, away, MatchStage.GROUP)
+        group = ""
+        for gl, members in GROUP_MEMBERS.items():
+            if home_name in members:
+                group = gl
+                break
+        result.group = group
+        result.rn = rn
+        results.append(result)
+
+    stage_map = {"R32":"R32","R16":"R16","QF":"QF","SF":"SF","FIN":"Final"}
+    for home_name, away_name, skey in KNOCKOUT_MATCHUPS:
+        home = data_manager.get_dynamic_team(home_name, use_player_data=True)
+        away = data_manager.get_dynamic_team(away_name, use_player_data=True)
+        stage = {"R32":MatchStage.R16,"R16":MatchStage.R16,"QF":MatchStage.QUARTER,
+                 "SF":MatchStage.SEMI,"FIN":MatchStage.FINAL}[skey]
+        result = predictor.predict(home, away, stage)
+        result.group = "KO"
+        result.stage_label = stage_map[skey]
+        results.append(result)
+    return results
+
+
+def get_champion_odds():
+    """Get champion odds from Monte Carlo simulation."""
+    return CHAMPION_ODDS
+
+
+def get_match_stage_and_price(home_name, away_name):
+    """Determine match stage key, label and price for a given matchup."""
+    # Check group stage
+    for h, a, _ in GROUP_STAGE_MATCHUPS:
+        if (h == home_name and a == away_name) or (h == away_name and a == home_name):
+            return "group", "小组赛", 69
+
+    # Check knockout stage
+    stage_map = {
+        "R32": ("knockout", "1/16决赛", 169),
+        "R16": ("knockout", "1/8决赛", 169),
+        "QF": ("knockout", "1/4决赛", 169),
+        "SF": ("semi", "半决赛", 269),
+        "FIN": ("final", "决赛", 398),
+    }
+    for h, a, skey in KNOCKOUT_MATCHUPS:
+        if (h == home_name and a == away_name) or (h == away_name and a == home_name):
+            return stage_map.get(skey, ("unknown", "未知", 0))
+
+    return "unknown", "未知", 0
+
+
+# ============================================================================
+# Session/User Management
+# ============================================================================
+
+DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR.mkdir(exist_ok=True)
+USERS_FILE = DATA_DIR / "users.json"
+TOKENS_FILE = DATA_DIR / "tokens.json"
+
+def load_json(path):
+    if path.exists():
+        try:
+            with open(path, encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+def save_json(path, data):
+    """Atomic write: write to temp file first, then rename."""
+    import tempfile
+    try:
+        dir_path = os.path.dirname(path)
+        os.makedirs(dir_path, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix='.tmp', prefix='wc_')
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, path)
+    except Exception:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def backup_json(path):
+    """Create a timestamped backup."""
+    if not path.exists():
+        return
+    import shutil
+    backup_dir = os.path.join(os.path.dirname(path), 'backups')
+    os.makedirs(backup_dir, exist_ok=True)
+    ts = time.strftime('%Y%m%d_%H%M%S')
+    backup_path = os.path.join(backup_dir, f'{os.path.basename(path)}.{ts}')
+    try:
+        shutil.copy2(path, backup_path)
+    except Exception:
+        pass
+
+
+def get_session_user(token):
+    """Get username from session token."""
+    if not token:
+        return None
+    tokens = load_json(TOKENS_FILE)
+    return tokens.get(token)
+
+def check_premium(token, home_name=None, away_name=None):
+    """Check if user has premium access, with expiration and match-level permission.
+    
+    Returns: (is_premium: bool, purchase_type: str, reason: str)
+    - is_premium: True if user can access the requested report
+    - purchase_type: "all" (full pass), "single" (single match), or "" (free)
+    - reason: Human-readable status message
+    
+    If home_name/away_name are provided, checks match-level permission.
+    If not provided, checks global premium status (for nav bar, etc).
+    """
+    username = get_session_user(token)
+    if not username:
+        return False, "", ""
+    
+    # Admin always has full access
+    if username == "admin":
+        return True, "all", "active"
+    
+    users = load_json(USERS_FILE)
+    user = users.get(username)
+    if not user:
+        return False, "", ""
+    
+    # Check expiration
+    premium_until = user.get("premium_until", 0)
+    if premium_until and time.time() > premium_until:
+        # Premium expired - auto revoke
+        user["premium"] = False
+        user["purchase_type"] = ""
+        user["purchased_matches"] = []
+        user["premium_until"] = 0
+        save_json(USERS_FILE, users)
+        return False, "", "expired"
+    
+    is_premium = user.get("premium", False)
+    if not is_premium:
+        return False, "", ""
+    
+    purchase_type = user.get("purchase_type", "all")
+    
+    # If no specific match requested, just check global premium
+    if not home_name or not away_name:
+        return True, purchase_type, "active"
+    
+    # Match-level permission check
+    if purchase_type == "all":
+        return True, "all", "active"
+    
+    if purchase_type == "single":
+        purchased = user.get("purchased_matches", [])
+        match_key = f"{home_name}|{away_name}"
+        if match_key in purchased:
+            return True, "single", "active"
+        # Also check reverse order
+        match_key_rev = f"{away_name}|{home_name}"
+        if match_key_rev in purchased:
+            return True, "single", "active"
+        return False, "single", "match_not_purchased"
+    
+    # Legacy users without purchase_type field - treat as all-access
+    return True, "all", "active"
+
+
+def get_premium_until(token):
+    username = get_session_user(token)
+    if not username:
+        return 0
+    users = load_json(USERS_FILE)
+    user = users.get(username)
+    if not user:
+        return 0
+    until = user.get("premium_until", 0)
+    if until and time.time() > until:
+        return 0  # Expired
+    return until
+
+
+def get_user_info(token):
+    """Get full user info dict (for admin display)."""
+    username = get_session_user(token)
+    if not username:
+        return None
+    users = load_json(USERS_FILE)
+    return users.get(username)
+
+
+def get_match_key(home, away):
+    """Normalize match key (always alphabetical order)."""
+    return "|".join(sorted([home, away]))
+
+
+# Premium expiration durations (in seconds)
+PREMIUM_DURATION_SINGLE = 86400 * 3     # Single match: 3 days after purchase
+PREMIUM_DURATION_KNOCKOUT = 86400 * 7 # Knockout match: 7 days
+PREMIUM_DURATION_SEMI = 86400 * 14    # Semi-final: 14 days
+PREMIUM_DURATION_FINAL = 86400 * 30   # Final: 30 days
+PREMIUM_DURATION_ALL = 86400 * 120     # Full pass: 120 days (covers whole WC + buffer)
+# 2026 World Cup ends ~2026-07-19, so 120 days from any purchase covers the entire event
+WORLD_CUP_END_TIMESTAMP = 1781817600  # 2026-07-19 00:00:00 UTC
+
+
+def calculate_expiry(stage_key):
+    """Calculate premium expiration timestamp based on purchase stage."""
+    now = time.time()
+    if stage_key == "group":
+        return now + PREMIUM_DURATION_SINGLE
+    elif stage_key == "knockout":
+        return now + PREMIUM_DURATION_KNOCKOUT
+    elif stage_key == "semi":
+        return now + PREMIUM_DURATION_SEMI
+    elif stage_key == "final":
+        return now + PREMIUM_DURATION_FINAL
+    else:
+        return now + PREMIUM_DURATION_SINGLE
+
+
+def cleanup_expired_users():
+    """Clean up users whose premium has expired. Called periodically."""
+    users = load_json(USERS_FILE)
+    now = time.time()
+    changed = False
+    for uname, udata in users.items():
+        if uname == "admin":
+            continue
+        until = udata.get("premium_until", 0)
+        if until and now > until and udata.get("premium", False):
+            udata["premium"] = False
+            udata["purchase_type"] = ""
+            udata["purchased_matches"] = []
+            udata["premium_until"] = 0
+            changed = True
+            print(f"  Cleanup: {uname} premium expired")
+    if changed:
+        save_json(USERS_FILE, users)
+
+
+def data_backup_task():
+    """Periodically backup critical JSON files. Called every 6 hours."""
+    backup_json(USERS_FILE)
+    backup_json(TOKENS_FILE)
+    print(f"  Backup: JSON files backed up at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+
+
+import re
+
+
+def validate_username(username: str) -> tuple:
+    """
+    验证用户名规范。
+    返回: (is_valid, error_message)
+    """
+    if not username:
+        return False, "用户名不能为空"
+    if len(username) < 3:
+        return False, "用户名至少需要3个字符"
+    if len(username) > 20:
+        return False, "用户名最多20个字符"
+    # 支持中文、字母、数字、下划线
+    if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_]+$', username):
+        return False, "用户名只能包含中文、字母、数字或下划线"
+    return True, ""
+
+
+def validate_password(password: str) -> tuple:
+    """
+    验证密码规范。
+    返回: (is_valid, error_message)
+    """
+    if not password:
+        return False, "密码不能为空"
+    if len(password) < 6:
+        return False, "密码至少需要6位"
+    return True, ""
+
+
+# ============================================================================
+# Page Handlers
+# ============================================================================
+
+def handle_home(token):
+    """Home page."""
+    premium, _ptype, _reason = check_premium(token)
+    predictions = get_all_predictions()
+
+    groups = {}
+    for p in predictions:
+        if hasattr(p, 'group') and p.group and p.group != "KO":
+            g = p.group
+            if g not in groups:
+                groups[g] = []
+            groups[g].append(p)
+
+    # Groups overview with Chinese team names
+    groups_html = ""
+    for gl in sorted(groups.keys()):
+        gms = groups[gl][:6]
+        members = GROUP_MEMBERS.get(gl, [])
+        members_cn = " · ".join([tcn(m) for m in members])
+        matches_list = ""
+        for p in gms:
+            home_cn = tcn(p.home_team)
+            away_cn = tcn(p.away_team)
+            sc = f'{p.most_likely_score[0]}:{p.most_likely_score[1]}' if premium else "?:?"
+            matches_list += f'<span class="gmatch" onclick="window.location=\'/match/{p.home_team}/{p.away_team}\'"><span>{home_cn} vs {away_cn}</span><span style="font-size:.8em;color:var(--dim)">{sc}</span></span>'
+        groups_html += f'<div class="group-card"><h3 class="group-title">{gl}组</h3><div style="font-size:.85em;color:var(--dim);margin-bottom:8px">{members_cn}</div>{matches_list}</div>'
+
+    username = get_session_user(token) or ""
+
+    # ── 赛程日历模块（参考竞品风格）──
+    from collections import defaultdict
+    from datetime import datetime
+    matches_by_date = defaultdict(list)
+    for m in ALL_MATCHES:
+        d = m.get("date", "")
+        if d:
+            matches_by_date[d].append(m)
+    sorted_dates = sorted(matches_by_date.keys())
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # Date selector bar (weekday + date)
+    date_selector = '<div class="cal-date-bar">'
+    for d in sorted_dates:
+        dt = datetime.strptime(d, "%Y-%m-%d")
+        weekday_cn = ["周一","周二","周三","周四","周五","周六","周日"][dt.weekday()]
+        day_num = dt.day
+        is_today = (d == today_str)
+        active_cls = " cal-active" if is_today else ""
+        dot = '<span class="cal-dot"></span>' if is_today else ""
+        date_selector += f'<div class="cal-date-card{active_cls}" onclick="showDate(\'{d}\')">'
+        date_selector += f'<div class="cal-weekday">{dt.month}月</div>'
+        date_selector += f'<div class="cal-daynum">{day_num}</div>{dot}</div>'
+    date_selector += "</div>"
+
+    calendar_html = '<div id="schedule-calendar">'
+    calendar_html += '<h2 class="section-title">📅 赛程日历</h2>'
+    calendar_html += date_selector
+    calendar_html += '<div id="calendar-matches" style="display:none">'
+    calendar_html += '<div id="calendar-matches-list"></div>'
+    calendar_html += "</div>"
+    calendar_html += """
+    <script>
+    var _allMatches = %s;
+    var _byDate = {};
+    var sorted_dates = %s;
+    _allMatches.forEach(function(m) {
+        if (!_byDate[m.date]) _byDate[m.date] = [];
+        _byDate[m.date].push(m);
+    });
+
+    function showDate(dateStr) {
+        var list = _byDate[dateStr] || [];
+        var container = document.getElementById("calendar-matches");
+        var listDiv = document.getElementById("calendar-matches-list");
+        if (list.length === 0) { container.style.display = "none"; return; }
+        container.style.display = "block";
+
+        document.querySelectorAll(".cal-date-card").forEach(function(card) {
+            card.classList.remove("cal-active");
+            var dot = card.querySelector(".cal-dot");
+            if (dot) dot.remove();
+        });
+        var activeCard = document.querySelector('.cal-date-card[onclick*="' + dateStr + '"');
+        if (activeCard) {
+            activeCard.classList.add("cal-active");
+            if (!activeCard.querySelector(".cal-dot")) {
+                activeCard.insertAdjacentHTML("beforeend", '<span class="cal-dot"></span>');
+            }
+        }
+
+        var html = "";
+        list.forEach(function(m) {
+            var statusText = m.status === "已结束" ? "已结束" : m.status === "已取消" ? "已取消" : "未开始";
+            var statusClass = m.status === "已结束" ? "status-finished" : m.status === "已取消" ? "status-cancelled" : "status-upcoming";
+            var scoreHtml = (m.home_score !== null && m.away_score !== null)
+                ? '<div class="cal-score-num">' + m.home_score + " - " + m.away_score + "</div>"
+                : (m.status === "已取消"
+                    ? '<div class="cal-cancelled-text">比赛取消</div>'
+                    : '<div class="cal-vs">VS</div>');
+            var groupLabel = m.group ? '<span class="cal-group">' + m.group + "组</span>" : "";
+            var btnText = m.status === "已结束" ? "查看回顾" : m.status === "已取消" ? "已取消" : "查看预测";
+            var btnClass = m.status === "已结束" ? "cal-predict-btn" : m.status === "已取消" ? "cal-predict-btn cal-btn-grey" : "cal-predict-btn";
+            var btnDisabled = m.status === "已取消" ? ' style="pointer-events:none;opacity:.5"' : "";
+
+            html += '<div class="cal-match-card">'
+                + '<div class="cal-match-header">' + groupLabel + '<span class="cal-status ' + statusClass + '">' + statusText + "</span></div>"
+                + '<div class="cal-match-body">'
+                + '<div class="cal-team cal-team-left">'
+                + '<div class="cal-flag">' + (m.home_cn || "?") + "</div>"
+                + '<div class="cal-rank">' + (m.home_rank || "") + "</div></div>"
+                + '<div class="cal-match-center">' + scoreHtml
+                + '<div class="cal-venue-label">' + (m.venue || "") + '</div>'
+                + '<div class="cal-match-time">📍 北京时间 ' + (m.time || "?") + '</div></div>'
+                + '<div class="cal-team cal-team-right">'
+                + '<div class="cal-flag">' + (m.away_cn || "?") + "</div>"
+                + '<div class="cal-rank">' + (m.away_rank || "") + "</div></div>"
+                + "</div>"
+                + ((m.status !== "已取消")
+                    ? '<a href="/match/' + encodeURIComponent(m.home) + "/" + encodeURIComponent(m.away) + '" class="' + btnClass + '"' + btnDisabled + '>' + btnText + "</a>"
+                    : "")
+                + "</div>";
+        });
+        listDiv.innerHTML = html;
+    }
+
+    (function() {
+        var today = "%s";
+        if (_byDate[today] && _byDate[today].length > 0) {
+            showDate(today);
+        } else if (sorted_dates.length > 0) {
+            showDate(sorted_dates[0]);
+        }
+    })();
+    </script>
+    """ % (json.dumps([m for m in ALL_MATCHES], ensure_ascii=False), json.dumps(sorted_dates, ensure_ascii=False), today_str)
+    calendar_html += "</div>"
+
+    content = f"""
+    <section class="hero">
+        <h1 class="hero-title">2026世界杯<br><span class="grad-text">AI比分预测</span></h1>
+        <p class="hero-sub">泊松分布 · 48支球队 · 104场比赛</p>
+        <div class="hero-cta">
+            {"" if premium else '<a href="/products" class="btn btn-primary">购买全车套餐 - ¥2999</a>'}
+        </div>
+    </section>
+    <section class="section">
+        {calendar_html}
+    </section>
+    <section class="section"><h2 class="section-title">小组分组</h2>
+    <div class="groups-grid">{groups_html}</div></section>
+    """
+    return render_page("首页 - 波胆教父", content, "home", premium, username)
+
+
+def handle_model(token):
+    """Quantitative model explanation page."""
+    premium, _ptype, _reason = check_premium(token)
+    username = get_session_user(token) or ""
+
+    content = """
+    <div class="page-header">
+        <h1>四层量化模型</h1>
+        <p>金融工程技术框架 · 数据驱动 · 概率优先</p>
+    </div>
+
+    <section class="section">
+        <h2 class="section-title" style="border-left-color:#3B82F6">L1 基础层</h2>
+        <p style="color:var(--dim);margin-bottom:16px">类比股票财务基本面，收录球队近12个月客观数据。</p>
+        <div class="sg">
+            <div class="sc"><div class="sl" style="color:#3B82F6">攻击因子</div><div class="sv">xG · 射正率</div></div>
+            <div class="sc"><div class="sl" style="color:#10B981">防守因子</div><div class="sv">xGA · 拦截率</div></div>
+            <div class="sc"><div class="sl" style="color:#F59E0B">体能因子</div><div class="sv">赛程 · 伤病</div></div>
+            <div class="sc"><div class="sl" style="color:#06B6D4">主客场因子</div><div class="sv">海拔 · 时差</div></div>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2 class="section-title" style="border-left-color:#F59E0B">L2 特征层</h2>
+        <p style="color:var(--dim);margin-bottom:16px">类比技术指标，基于基础数据二次加工提取超额收益因子。</p>
+        <div class="card-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div class="card">
+                <h3 style="font-size:1rem;margin-bottom:8px"><span style="color:#F59E0B">📈</span> 进攻动量因子</h3>
+                <p style="color:var(--dim);font-size:.85em">近3场 vs 近5场进球加权差值，识别球队状态升温/降温。</p>
+                <code style="display:block;background:var(--bg);padding:8px;border-radius:6px;font-size:.8em;margin-top:8px">momentum = (avg3 - avg5) / avg5 × 100</code>
+            </div>
+            <div class="card">
+                <h3 style="font-size:1rem;margin-bottom:8px"><span style="color:#06B6D4">🔄</span> 历史直对因子</h3>
+                <p style="color:var(--dim);font-size:.85em">近10年对阵记录结合年份衰减权重，数据化对赌历史记忆。</p>
+                <code style="display:block;background:var(--bg);padding:8px;border-radius:6px;font-size:.8em;margin-top:8px">h2h_score = Σ(result × decay^year)</code>
+            </div>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2 class="section-title" style="border-left-color:#06B6D4">L3 战术层</h2>
+        <p style="color:var(--dim);margin-bottom:16px">类比宏观策略，分析教练博弈、阵型克制和赛事阶段压力。</p>
+        <div class="sg">
+            <div class="sc"><div class="sl" style="color:#06B6D4">阵型克制矩阵</div><div class="sv">4-3-3 vs 5-3-2</div></div>
+            <div class="sc"><div class="sl" style="color:#06B6D4">教练博弈因子</div><div class="sv">风格·大赛经验</div></div>
+            <div class="sc"><div class="sl" style="color:#06B6D4">赛程阶段权重</div><div class="sv">小组赛·淘汰赛</div></div>
+            <div class="sc"><div class="sl" style="color:#06B6D4">压力测试</div><div class="sv">关键战役系数</div></div>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2 class="section-title" style="border-left-color:#10B981">L4 情绪层</h2>
+        <p style="color:var(--dim);margin-bottom:16px">类比市场情绪，通过NLP和盘口异动捕捉价值低估机会。</p>
+        <div class="card-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div class="card">
+                <h3 style="font-size:1rem;margin-bottom:8px"><span style="color:#10B981">💬</span> NLP舆情分析</h3>
+                <p style="color:var(--dim);font-size:.85em">抓取Twitter/微博讨论量与情感极性，识别媒体过度吹嘘导致的赔率扭曲。</p>
+            </div>
+            <div class="card">
+                <h3 style="font-size:1rem;margin-bottom:8px"><span style="color:#F59E0B">💰</span> 盘口资金流分析</h3>
+                <p style="color:var(--dim);font-size:.85em">监测亚赔/欧赔开赛前24h异动，识别庄家让利或资金单边流入信号——最核心的α来源。</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2 class="section-title" style="border-left-color:var(--accent)">三大核心算法</h2>
+        <div class="card-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
+            <div class="card">
+                <h3 style="font-size:1rem;margin-bottom:8px"><span style="color:#3B82F6">〰️</span> 泊松分布回归</h3>
+                <p style="color:var(--dim);font-size:.85em;margin-bottom:8px">进球数服从泊松分布，通过历史数据拟合λ值，计算任意比分理论概率。</p>
+                <code style="display:block;background:var(--bg);padding:8px;border-radius:6px;font-size:.78em">P(k) = (λᵏ × e⁻λ) / k!<br>λ_home = ATT_home × DEF_away × 修正</code>
+            </div>
+            <div class="card">
+                <h3 style="font-size:1rem;margin-bottom:8px"><span style="color:#F59E0B">🎲</span> 蒙特卡洛模拟</h3>
+                <p style="color:var(--dim);font-size:.85em;margin-bottom:8px">引入随机扰动模拟红牌、伤病、天气等不确定性，10000次模拟修正概率。</p>
+                <code style="display:block;background:var(--bg);padding:8px;border-radius:6px;font-size:.78em">for i in range(10000):<br>  goals_h = poisson(λ_h + noise)<br>  record(goals_h, goals_a)</code>
+            </div>
+            <div class="card">
+                <h3 style="font-size:1rem;margin-bottom:8px"><span style="color:#06B6D4">🔄</span> 贝叶斯实时修正</h3>
+                <p style="color:var(--dim);font-size:.85em;margin-bottom:8px">随伤病通报、盘口变化、临阵换帅等新信息实时更新先验概率。</p>
+                <code style="display:block;background:var(--bg);padding:8px;border-radius:6px;font-size:.78em">P(H|E) = P(E|H) × P(H) / P(E)</code>
+            </div>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2 class="section-title" style="border-left-color:#F59E0B">历史模型表现（回测）</h2>
+        <p style="color:var(--dim);font-size:.85em;margin-bottom:16px">数据来源：2022卡塔尔世界杯、2024欧洲杯回测（仅供参考）</p>
+        <div class="sg">
+            <div class="sc"><div class="sl">胜平负准确率</div><div class="sv" style="color:#10B981">78%</div></div>
+            <div class="sc"><div class="sl">大小球准确率</div><div class="sv" style="color:#F59E0B">71%</div></div>
+            <div class="sc"><div class="sl">精准波胆(±1球)</div><div class="sv" style="color:#06B6D4">52%</div></div>
+            <div class="sc"><div class="sl">盘口推荐盈利率</div><div class="sv" style="color:#10B981">63%</div></div>
+        </div>
+        <div style="margin-top:16px;padding:12px;background:rgba(245,158,11,0.08);border-radius:8px;font-size:.82em;color:#D97706">
+            ⚠️ 历史表现不代表未来收益，预测结果仅供参考，足球结果存在不可预测的随机性。
+        </div>
+    </section>
+    """
+    return render_page("量化模型 - 波胆教父", content, "model", premium, username)
+
+
+def handle_matches(token):
+    """All matches page - optimized layout with better visual comfort."""
+    premium, _ptype, _reason = check_premium(token)
+    predictions = get_all_predictions()
+
+    groups = {}
+    for p in predictions:
+        if hasattr(p, 'group') and p.group and p.group != "KO":
+            g = p.group
+            if g not in groups:
+                groups[g] = []
+            groups[g].append(p)
+
+    # Group color mapping
+    group_colors = {
+        "A": "#3B82F6", "B": "#10B981", "C": "#EF4444", "D": "#F59E0B",
+        "E": "#8B5CF6", "F": "#06B6D4", "G": "#EC4899", "H": "#14B8A6",
+        "I": "#F97316", "J": "#6366F1", "K": "#84CC16", "L": "#DC2626",
+    }
+
+    # Build optimized group sections
+    groups_html = ""
+    for gl in sorted(groups.keys()):
+        gms = groups[gl]
+        members = GROUP_MEMBERS.get(gl, [])
+        gc = group_colors.get(gl, "var(--accent)")
+
+        # Team badges (no English prefix)
+        team_badges = ""
+        for m in members:
+            team = WORLD_CUP_TEAMS_2026.get(m)
+            rank_str = f"第{team.fifa_ranking}位" if team else ""
+            team_badges += f'<span style="display:inline-flex;align-items:center;gap:3px;padding:4px 10px;background:{gc}15;border-radius:14px;font-size:.76em;color:#555;border:1px solid {gc}30">{tcn(m)}<span style="color:#aaa;font-size:.7em">{rank_str}</span></span>'
+
+        match_cards = ""
+        for idx, p in enumerate(gms):
+            home_cn = tcn(p.home_team)
+            away_cn = tcn(p.away_team)
+            ht = WORLD_CUP_TEAMS_2026.get(p.home_team)
+            at = WORLD_CUP_TEAMS_2026.get(p.away_team)
+            home_rank = f"第{ht.fifa_ranking}位" if ht else ""
+            away_rank = f"第{at.fifa_ranking}位" if at else ""
+
+            if premium:
+                score_html = f'<div style="font-size:1.6em;font-weight:900;background:var(--grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent">{p.most_likely_score[0]}:{p.most_likely_score[1]}</div>'
+            else:
+                score_html = '<div style="font-size:1em;color:#b0b8b0;font-weight:700;letter-spacing:3px">VS</div>'
+
+            round_label = {1: "第一轮", 2: "第二轮", 3: "第三轮"}.get(p.rn, "")
+
+            match_cards += f"""
+            <div class="mc-card" style="border-left:4px solid {gc};cursor:pointer" onclick="window.location='/match/{p.home_team}/{p.away_team}'">
+                <div class="mc-top">
+                    <span class="mc-round">{round_label}</span>
+                    <span class="mc-status-dot"></span>
+                </div>
+                <div class="mc-teams">
+                    <div class="mc-team-mc mc-home">
+                        <span class="mc-name">{home_cn}</span>
+                        <span class="mc-rank">{home_rank}</span>
+                    </div>
+                    <div class="mc-vs-box">{score_html}</div>
+                    <div class="mc-team-mc mc-away">
+                        <span class="mc-name">{away_cn}</span>
+                        <span class="mc-rank">{away_rank}</span>
+                    </div>
+                </div>
+                <div class="mc-actions">
+                    <a href="/match/{p.home_team}/{p.away_team}" class="mc-btn mc-btn-view">查看详情</a>
+                    <a href="/payment?match={p.home_team}&vs={p.away_team}&stage=group" class="mc-btn mc-btn-buy">购买单场</a>
+                </div>
+            </div>
+            """
+
+        groups_html += f"""
+        <div class="mc-section" id="group-{gl}">
+            <div class="mc-header">
+                <div class="mc-header-left">
+                    <span class="mc-group-badge" style="background:{gc};color:#fff">{gl}</span>
+                    <span class="mc-group-title">组</span>
+                </div>
+                <div class="mc-members">{team_badges}</div>
+            </div>
+            <div class="mc-list">{match_cards}</div>
+        </div>
+        """
+
+    username = get_session_user(token) or ""
+    buy_cta = "" if premium else '<div style="text-align:center;padding:40px 20px"><a href="/pricing" class="btn btn-primary" style="font-size:1em;padding:14px 40px;border-radius:30px;background:linear-gradient(135deg,#C4A035,#2D8A3E);box-shadow:0 4px 20px rgba(45,138,62,.2)">购买全车套餐 · ¥2999 →</a></div>'
+
+    knockout_placeholder = """
+    <section class="section" style="margin-top:48px">
+        <div class="card" style="text-align:center;padding:50px 24px;background:linear-gradient(135deg,rgba(196,160,53,.04),rgba(45,138,62,.03));border:1px solid rgba(196,160,53,.12);border-radius:20px">
+            <div style="font-size:3em;margin-bottom:16px">🏆</div>
+            <h3 style="margin-bottom:10px;font-size:1.2em">淘汰赛阶段</h3>
+            <p style="color:var(--dim);font-size:.9em;margin-bottom:8px;line-height:1.6">小组赛结束后，各小组出线名额确认后将立即上线完整对阵预测</p>
+            <div style="display:inline-flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-top:16px">
+                <span style="padding:6px 14px;background:rgba(6,182,212,.08);border-radius:12px;font-size:.82em;color:#06B6D4">1/8 决赛</span>
+                <span style="padding:6px 14px;background:rgba(245,158,11,.08);border-radius:12px;font-size:.82em;color:#F59E0B">1/4 决赛</span>
+                <span style="padding:6px 14px;background:rgba(239,68,68,.08);border-radius:12px;font-size:.82em;color:#EF4444">半决赛</span>
+                <span style="padding:6px 14px;background:rgba(196,160,53,.12);border-radius:12px;font-size:.82em;color:#C4A035">决赛</span>
+            </div>
+        </div>
+    </section>
+    """
+
+    nav_bar = '<div class="mc-nav">'
+    for gl in sorted(groups.keys()):
+        gc = group_colors.get(gl, 'var(--accent)')
+        nav_bar += f'<a href="#group-{gl}" class="mc-nav-item" style="background:{gc}12;border-color:{gc}30;color:{gc}">{gl}组</a>'
+    nav_bar += '</div>'
+
+    content_str = f"""
+    <div class="page-header"><h1>赛事中心</h1><p>48支球队 · 12个小组 · 72场小组赛</p></div>
+    {nav_bar}
+    {groups_html}
+    {knockout_placeholder}
+    {buy_cta}
+    """
+    return render_page("赛事中心 - 波胆教父", content_str, "matches", premium, username)
+
+
+# 球队文字描述数据（教练风格/磨合度/默契度/状态）
+# ══════════════════════════════════════════════════════
+TEAM_DESC = {
+    # Group A
+    "Mexico": {"coach": "哈维尔·阿吉雷", "style": "防守反击+快速边路", "formation": "5-3-2",
+               "cohesion": "高", "key_players": "希门尼斯(伤疑)、洛萨诺、奥乔亚",
+               "strengths": "主场作战士气高涨，反击速度极快，门将经验丰富",
+               "weaknesses": "主力前锋伤病隐患，中场创造力不足",
+               "morale_desc": "东道主优势明显，球迷热情高涨"},
+    "South Korea": {"coach": "洪明甫", "style": "高压逼抢+两翼齐飞", "formation": "4-2-3-1",
+                    "cohesion": "中高", "key_players": "孙兴慜(队长)、李刚仁、黄喜灿",
+                    "strengths": "前场三叉戟配合默契，定位球威胁大",
+                    "weaknesses": "防线转身慢，面对速度型前锋吃力",
+                    "morale_desc": "孙兴慜状态正佳，全队信心充足"},
+    "South Africa": {"coach": "布罗奥斯", "style": "身体对抗+长传冲吊", "formation": "4-4-2",
+                     "cohesion": "中等", "key_players": "姆韦普、马克戈帕",
+                     "strengths": "身体条件出色，拼抢积极",
+                     "weaknesses": "技战术水平有限，大赛经验不足",
+                     "morale_desc": "首次世界杯小组出线是目标"},
+    "Czechia": {"coach": "雅罗斯拉夫·希尔哈维", "style": "控球渗透+中路推进", "formation": "3-4-2-1",
+                "cohesion": "中高", "key_players": "苏切克、曹法尔、霍莱什",
+                "strengths": "中场控制力强，定位球战术丰富",
+                "weaknesses": "锋线终结能力一般，后防偶尔走神",
+                "morale_desc": "欧洲杯经验丰富，心态稳定"},
+    # Group B
+    "Canada": {"coach": "杰西·马什", "style": "高位压迫+边路突击", "formation": "4-3-3",
+               "cohesion": "高", "key_players": "戴维斯、阿方索·戴维斯、乔纳森·戴维",
+               "strengths": "边路速度极快，转换进攻犀利",
+               "weaknesses": "阵地战破密集防守能力不足",
+               "morale_desc": "东道主身份加持，新一代核心成熟"},
+    "Switzerland": {"coach": "穆拉特·雅金", "style": "稳固防守+高效反击", "formation": "3-4-2-1",
+                    "cohesion": "高", "key_players": "扎卡(队长)、沙奇里、阿坎吉",
+                    "strengths": "防守体系成熟，反击效率极高",
+                    "weaknesses": "缺乏顶级射手，进球依赖定位球",
+                    "morale_desc": "连续三届世界杯小组出线，心理素质过硬"},
+    "Qatar": {"coach": "巴托梅乌", "style": "传控体系+短传渗透", "formation": "4-2-3-1",
+              "cohesion": "高", "key_players": "阿克拉姆·阿菲夫、海多斯、蒙塔里",
+              "strengths": "传控娴熟，亚洲杯冠军班底",
+              "weaknesses": "身体对抗吃亏，面对欧美强队压力大",
+              "morale_desc": "本土作战，但上届世界杯阴影仍在"},
+    "Bosnia and Herzegovina": {"coach": "梅赫梅德·巴伊达雷维奇", "style": "技术流+中路组织", "formation": "4-1-4-1",
+                                "cohesion": "中等", "key_players": "哲科(可能退役)、皮亚尼奇、科拉西纳茨",
+                                "strengths": "中场技术细腻，传球视野开阔",
+                                "weaknesses": "阵容老化严重，防线速度偏慢",
+                                "morale_desc": "黄金一代谢幕之战，动力与隐忧并存"},
+    # Group C
+    "Brazil": {"coach": "卡洛斯·安切洛蒂", "style": "攻势足球+桑巴艺术", "formation": "4-2-3-1",
+               "cohesion": "高", "key_players": "维尼修斯、罗德里戈、恩德里克",
+               "strengths": "个人能力顶级，攻击线豪华程度世界第一",
+               "weaknesses": "后腰位置深度不足，边后卫助攻后的空档",
+               "morale_desc": "夺冠最大热门，全队求胜欲望强烈"},
+    "Morocco": {"coach": "瓦利德·雷格拉吉", "style": "紧凑防守+闪电反击", "formation": "4-3-3",
+                "cohesion": "很高", "key_players": "阿什拉夫·哈基米、马兹拉维、齐耶赫",
+                "strengths": "防守纪律性极佳，反击一击致命",
+                "weaknesses": "阵地战攻坚乏力，依赖定位球",
+                "morale_desc": "上届四强创造历史，本届志在超越"},
+    "Scotland": {"coach": "史蒂夫·克拉克", "style": "硬朗对抗+长传调度", "formation": "3-5-2",
+                 "cohesion": "高", "key_players": "麦克托米奈、罗伯逊、蒂尔尼",
+                 "strengths": "团队执行力强，定位球威胁大",
+                 "weaknesses": "缺乏世界级球星，创造力有限",
+                 "morale_desc": "连续两届入围，渴望突破"},
+    "Haiti": {"coach": "让·雅克·皮埃尔", "style": "顽强防守+快速反击", "formation": "4-4-2",
+              "cohesion": "中等", "key_players": "德莫尼尔、贝利克斯",
+              "strengths": "斗志昂扬，跑动积极",
+              "weaknesses": "整体实力差距明显，板凳深度不足",
+              "morale_desc": "黑马姿态出征，每分必争"},
+    # Group D
+    "USA": {"coach": "格雷格·贝哈尔特", "style": "高位逼抢+快速转换", "formation": "4-3-3",
+            "cohesion": "高", "key_players": "普利希奇、麦肯尼、巴洛贡",
+            "strengths": "体能充沛，年轻化阵容冲击力强",
+            "weaknesses": "关键时刻决策能力待提升",
+            "morale_desc": "东道主之利，新生代全面接班"},
+    "Australia": {"coach": "格雷厄姆· Arnold", "style": "铁血防守+定位球", "formation": "4-4-2",
+                  "cohesion": "高", "key_players": "莱基(队长)、古德温、赫鲁斯蒂奇",
+                  "strengths": "团队协作能力强，定位球得分率高",
+                  "weaknesses": "技术细腻度不足，缺少爆点",
+                  "morale_desc": "连续五届参赛，老将带新人的稳定架构"},
+    "Paraguay": {"coach": "丹尼尔·加内龙", "style": "南美硬派+快速反击", "formation": "4-3-3",
+                 "cohesion": "中高", "key_players": "阿尔米隆、萨纳布里亚",
+                 "strengths": "中场拦截能力强，反击效率不错",
+                 "weaknesses": "进攻手段单一，过于依赖反击",
+                 "morale_desc": "南美预选赛表现出色，状态正佳"},
+    "Turkiye": {"coach": "文森佐·蒙特拉", "style": "意大利式防守+边路突破", "formation": "3-5-2",
+                "cohesion": "中等", "key_players": "恰尔汗奥卢、居莱尔、德米拉尔",
+                "strengths": "中场技术出色，有世界级球星坐镇",
+                "weaknesses": "防线稳定性欠佳，容易犯错",
+                "morale_desc": "蒙特拉上任后正在磨合新体系"},
+    # Group E
+    "Germany": {"coach": "朱利安·纳格尔斯曼", "style": "控球主导+高位防线", "formation": "4-2-3-1",
+                "cohesion": "中高", "key_players": "穆西亚拉、维尔茨、基米希、诺伊尔(队长)",
+                "strengths": "中场创造力顶级，新人辈出",
+                "weaknesses": "中锋位置薄弱，大赛抗压能力存疑",
+                "morale_desc": "主场作战压力与动力并存，急需证明自己"},
+    "Ecuador": {"coach": "费利克斯·桑切斯", "style": "高强度逼抢+边路传中", "formation": "4-4-2",
+                "cohesion": "高", "key_players": "凯塞多、埃斯特拉达、瓦伦西亚",
+                "strengths": "中场硬度足，身体素质出色",
+                "weaknesses": "技术细腻度一般，过度依赖定位球",
+                "morale_desc": "南美预选赛表现稳健，信心十足"},
+    "Ivory Coast": {"coach": "埃默尔斯·法埃", "style": "技术流+快速转换", "formation": "4-3-3",
+                    "cohesion": "中高", "key_players": "佩佩(可能退出)、阿莱、弗兰·凯西",
+                    "strengths": "前场个人能力强，反击速度快",
+                    "weaknesses": "防守组织松散，易被对手打穿",
+                    "morale_desc": "黄金一代逐渐老去，最后一搏"},
+    # Group F
+    "Netherlands": {"coach": "罗纳德·科曼", "style": "全攻全守现代版+边路走廊", "formation": "4-3-3",
+                    "cohesion": "高", "key_players": "范戴克(队长)、加克波、西蒙斯、赖因德斯",
+                    "strengths": "防线世界级，中场技术细腻",
+                    "weaknesses": "中锋位置不稳定，缺少强力得分手",
+                    "morale_desc": "欧洲杯四强班底，本届野心勃勃"},
+    "Japan": {"coach": "森保一", "style": "控球渗透+灵活多变", "formation": "4-2-3-1",
+              "cohesion": "很高", "key_players": "久保建英、三笘薰、远藤航、镰田大地",
+              "strengths": "传控娴熟，球员遍布欧洲五大联赛",
+              "weaknesses": "身体对抗吃亏，防空能力弱",
+              "morale_desc": "连续两届小组出线，目标八强甚至更高"},
+    "Tunisia": {"coach": "贾勒·卡德里", "style": "铁桶阵+伺机反击", "formation": "4-1-4-1",
+                "cohesion": "中高", "key_players": "汉尼卜、哈兹里、马斯卢西",
+                "strengths": "防守纪律严明，不易被打穿",
+                "weaknesses": "进攻端创造力匮乏，进球困难",
+                "morale_desc": "非洲劲旅代表，以弱胜强的经典案例"},
+    "Sweden": {"coach": "扬内·安德森", "style": "北欧实用主义+定位球专家", "formation": "4-4-2",
+               "cohesion": "高", "key_players": "库卢塞夫斯基、伊萨克、林德洛夫、福斯贝里",
+               "strengths": "身高体壮，定位球得分能力顶级",
+               "weaknesses": "节奏偏慢，面对快节奏球队被动",
+               "morale_desc": "回归世界杯舞台，北欧铁军蓄势待发"},
+    # Group G
+    "Belgium": {"coach": "多米尼克·泰斯科/德布劳内(临时?)", "style": "控球+快速传递", "formation": "4-3-3",
+                "cohesion": "中等", "key_players": "德布劳内(队长)、卢卡库、库尔图瓦",
+                "strengths": "中场大师级配置，个人能力突出",
+                "weaknesses": "黄金一代老化，防线存在隐患",
+                "morale_desc": "新老交替期，需要时间磨合"},
+    "Iran": {"coach": "阿米尔·加拉埃伊", "style": "严密组织+快速反击", "formation": "4-1-4-1",
+             "cohesion": "高", "key_players": "阿兹蒙、塔雷米、贾汉巴赫什",
+             "strengths": "战术执行力强，反击效率高",
+             "weaknesses": "面对强队时控球率过低",
+             "morale_desc": "连续三届参赛，经验丰富"},
+    "Egypt": {"coach": "鲁迪·加西亚", "style": "防守反击+萨拉赫单核", "formation": "4-2-3-1",
+              "cohesion": "中高", "key_players": "萨拉赫(队长)、埃尔内尼、马拉斯",
+              "strengths": "拥有世界级巨星，反击有爆点",
+              "weaknesses": "过于依赖萨拉赫个人发挥",
+              "morale_desc": "萨拉赫的健康状况决定一切"},
+    "New Zealand": {"coach": "丹尼·海伊", "style": "英式硬派+长传冲吊", "formation": "3-5-2",
+                   "cohesion": "高", "key_players": "伍德、史密斯、托马斯",
+                   "strengths": "拼搏精神可嘉，团队凝聚力强",
+                   "weaknesses": "实力差距悬殊，难以制造威胁",
+                   "morale_desc": "大洋洲独苗，享受比赛为主"},
+    # Group H
+    "Spain": {"coach": "路易斯·德拉富恩特", "style": "极致传控+tiki-taka", "formation": "4-3-3",
+              "cohesion": "很高", "key_players": "罗德里(队长)、亚马尔、威廉姆斯、尼科",
+              "strengths": "控球能力世界顶级，新人天赋溢出",
+              "weaknesses": "缺乏强力中锋，破密集防守困难",
+              "morale_desc": "欧洲杯冠军班底，年轻化改革成功"},
+    "Uruguay": {"coach": "贝尔萨(已离任)/迭戈·阿隆索", "style": "疯狗式逼抢+激情足球", "formation": "4-3-3",
+                "cohesion": "高", "key_players": "努涅斯、巴尔韦德、阿劳霍、乌加特",
+                "strengths": "中场绞肉机组合，逼抢强度恐怖",
+                "weaknesses": "锋线把握机会能力不稳定",
+                "morale_desc": "换帅后正在适应新体系"},
+    "Saudi Arabia": {"coach": "埃尔韦·勒纳尔", "style": "低位防守+快速转换", "formation": "4-5-1",
+                    "cohesion": "高", "key_players": "达瓦萨里、法拉吉、布莱坎",
+                    "strengths": "防守组织有序，反击有章法",
+                    "weaknesses": "技术细腻度不足，控球能力差",
+                    "morale_desc": "上届击败阿根廷的奇迹仍被铭记"},
+    "Cape Verde": {"coach": "布鲁诺·比达尔", "style": "葡萄牙式技术流+快速转换", "formation": "4-3-3",
+                   "cohesion": "中高", "key_players": "卡布拉尔、戈麦斯",
+                   "strengths": "非洲区黑马，战术素养不俗",
+                   "weaknesses": "板凳深度不够，大赛经验欠缺",
+                   "morale_desc": "首次世界杯，无包袱上阵"},
+    # Group I
+    "France": {"coach": "迪迪埃·德尚", "style": "均衡务实+球星个人能力", "formation": "4-2-3-1",
+               "cohesion": "高", "key_players": "姆巴佩(队长)、楚阿梅尼、格列兹曼、登贝莱",
+               "strengths": "阵容厚度冠绝全场，各位置均有世界级球员",
+               "weaknesses": "更衣室氛围偶有波动，伤病管理",
+               "morale_desc": "卫冕冠军身份，目标直指冠军"},
+    "Senegal": {"coach": "阿里乌·西塞", "style": "非洲力量+快速反击", "formation": "4-3-3",
+                "cohesion": "高", "key_players": "萨尔、杰克逊、门迪",
+                "strengths": "身体素质出众，反击速度快",
+                "weaknesses": "中场组织能力一般",
+                "morale_desc": "非洲冠军班底，信心满满"},
+    "Norway": {"coach": "斯塔勒·索尔巴肯", "style": "直接打法+双锋冲击", "formation": "4-3-3",
+               "cohesion": "高", "key_players": "哈兰德、厄德高、索尔洛特",
+               "strengths": "拥有世界最佳前锋，进攻火力凶猛",
+               "weaknesses": "防线质量参差不齐，中场偏软",
+               "morale_desc": "哈兰德首次出战世界杯，万众瞩目"},
+    "Iraq": {"coach": "卡萨斯", "style": "中东硬派+密集防守", "formation": "4-1-4-1",
+             "cohesion": "中高", "key_players": "侯赛因、阿里、阿明",
+             "strengths": "意志力顽强，团队配合熟练",
+             "weaknesses": "个人能力差距明显",
+             "morale_desc": "重返世界杯舞台，意义非凡"},
+    # Group J
+    "Argentina": {"coach": "斯卡洛尼", "style": "梅西核心+攻守平衡", "formation": "4-3-3/4-4-2",
+                  "cohesion": "很高", "key_players": "梅西(队长)、阿尔瓦雷斯、恩佐·费尔南德斯、利桑德罗·马丁内斯",
+                  "strengths": "卫冕冠军班底成熟，团队化学反应极佳",
+                  "weaknesses": "部分核心年龄偏大，体能储备成问题",
+                  "morale_desc": "卫冕冠军，全队士气如虹"},
+    "Austria": {"coach": "拉尔夫·朗尼克", "style": "高位逼抢+德式严谨", "formation": "4-2-2-2",
+                "cohesion": "很高", "key_players": "萨比策、莱默尔、鲍姆加特纳、阿拉巴",
+                "strengths": "逼抢强度欧洲顶级，战术执行精准",
+                "weaknesses": "缺少绝对巨星，上限受限",
+                "morale_desc": "欧国联惊艳表现，信心处于巅峰"},
+    "Algeria": {"coach": "沃尔特·曾加", "style": "防守反击+身体对抗", "formation": "4-3-3",
+                "cohesion": "中高", "key_players": "本拉赫马、本齐亚、斯利马尼",
+                "strengths": "身体条件好，定位球威胁大",
+                "weaknesses": "技战术水平一般",
+                "morale_desc": "非洲传统强队，期待突破"},
+    "Jordan": {"coach": "侯赛因·阿莫塔", "style": "稳守反击+团队足球", "formation": "4-2-3-1",
+               "cohesion": "高", "key_players": "亚辛·巴尼、阿里·奥尔万",
+               "strengths": "团队协作意识强，执行力到位",
+               "weaknesses": "个人能力差距明显",
+               "morale_desc": "亚洲杯亚军光环，力争创造奇迹"},
+    # Group K
+    "Portugal": {"coach": "罗伯托·马丁内斯", "style": "控球主导+边路进攻", "formation": "3-4-3",
+                 "cohesion": "高", "key_players": "C罗(队长)、B费、B席、莱奥、鲁本·迪亚斯",
+                 "strengths": "阵容豪华程度前三，替补都能首发",
+                 "weaknesses": "C罗使用方式争议，新老平衡微妙",
+                 "morale_desc": "C罗最后一届世界杯，全队为其而战"},
+    "Colombia": {"coach": "内斯托·洛伦佐", "style": "南美技术流+高压逼抢", "formation": "4-2-3-1",
+                 "cohesion": "很高", "key_players": "J罗、路易斯·迪亚斯、夸德拉多",
+                 "strengths": "技术流畅，团队配合行云流水",
+                 "weaknesses": "缺少绝对高中锋，头球能力弱",
+                 "morale_desc": "美洲杯冠军，状态火热"},
+    "Uzbekistan": {"coach": "斯拉廷·沙茨芬", "style": "中亚铁军+快速转换", "formation": "4-1-4-1",
+                    "cohesion": "高", "key_players": "肖穆罗多夫、乌鲁诺夫",
+                    "strengths": "团队执行力强，体能充沛",
+                    "weaknesses": "个人能力与世界级有差距",
+                    "morale_desc": "首次世界杯，全力展现中亚足球"},
+    "DR Congo": {"coach": "塞巴斯蒂安·德萨布雷", "style": "非洲力量+身体对抗", "formation": "4-4-2",
+                 "cohesion": "中等", "key_players": "巴坎布、姆温扎、马孔达",
+                 "strengths": "身体素质出色，拼抢积极",
+                 "weaknesses": "战术素养和纪律性有待提高",
+                 "morale_desc": "重返世界杯，珍惜每一场比赛"},
+    # Group L
+    "England": {"coach": "盖雷斯·索斯盖特", "style": "控球+边路传中", "formation": "4-2-3-1",
+                "cohesion": "高", "key_players": "凯恩(队长)、贝林厄姆、福登、萨卡、赖斯",
+                "strengths": "阵容星光璀璨，各位置都有英超顶级球员",
+                "weaknesses": "关键战心理素质存疑，大赛习惯性掉链子",
+                "morale_desc": "欧洲杯决赛失利后急需正名"},
+    "Croatia": {"coach": "兹拉特科·达利奇", "style": "中场控制+经验制胜", "formation": "4-3-3",
+                "cohesion": "很高", "key_players": "莫德里奇(队长)、格瓦迪奥尔、科瓦契奇、布罗佐维奇",
+                "strengths": "中场控制力顶级，大赛经验极其丰富",
+                "weaknesses": "阵容老化严重，体能是最大隐患",
+                "morale_desc": "黄金一代最后的舞蹈"},
+    "Ghana": {"coach": "奥托·阿多", "style": "快速转换+边路突击", "formation": "4-3-3",
+              "cohesion": "中高", "key_players": "库杜斯、乔丹·阿尤、托马斯",
+              "strengths": "反击速度极快，边路突破犀利",
+              "weaknesses": "中场控制力不足，易被压制",
+              "morale_desc": "非洲新星崛起，渴望重现辉煌"},
+    "Panama": {"coach": "托马斯·克里斯蒂安森", "style": "中美硬派+稳守反击", "formation": "5-4-1",
+               "cohesion": "高", "key_players": "戈多伊、穆里略、埃里克·戴维斯",
+               "strengths": "防守组织有序，不轻易丢球",
+               "weaknesses": "进攻能力极为有限",
+               "morale_desc": "第二次参加世界杯，积累经验为主"},
+}
+
+
+def generate_text_analysis(team_name):
+    """根据TeamStrength数值生成用户友好的中文文字分析"""
+    t = WORLD_CUP_TEAMS_2026.get(team_name)
+    d = TEAM_DESC.get(team_name, {})
+    if not t:
+        return "<p>暂无数据</p>"
+
+    # 攻击力 → 文字描述
+    if t.attack >= 1.35:
+        attack_text = "攻击力极强，场均预期进球超过1.5球，具备撕开任何防线的能力"
+    elif t.attack >= 1.20:
+        attack_text = "攻击力强劲，前场配合流畅，能创造大量得分机会"
+    elif t.attack >= 1.05:
+        attack_text = "攻击力中等偏上，有一定得分手段但不突出"
+    elif t.attack >= 0.90:
+        attack_text = "攻击力一般，主要依靠反击和定位球寻找机会"
+    else:
+        attack_text = "攻击力偏弱，进球难度较大"
+
+    # 防守力 → 文字描述（defense越小越好）
+    if t.defense <= 0.80:
+        defense_text = "防守极其稳固，失球数极少，后防体系堪称铜墙铁壁"
+    elif t.defense <= 0.90:
+        defense_text = "防守非常扎实，组织有序，不容易被对手打穿"
+    elif t.defense <= 1.00:
+        defense_text = "防守表现中规中矩，偶尔会出现漏洞"
+    elif t.defense <= 1.15:
+        defense_text = "防守存在一定问题，面对强队容易被压制"
+    else:
+        defense_text = "防守较为脆弱，失球风险较高"
+
+    # 近期状态 → 文字描述
+    if t.recent_form >= 1.06:
+        form_text = "近期状态火爆，近几场比赛表现出色，势头正盛"
+    elif t.recent_form >= 1.01:
+        form_text = "近期状态良好，球队整体表现稳定向上"
+    elif t.recent_form >= 0.97:
+        form_text = "近期状态平稳，没有明显的起伏"
+    elif t.recent_form >= 0.92:
+        form_text = "近期状态略显低迷，需要尽快调整"
+    else:
+        form_text = "近期状态不佳，多方面表现低于预期"
+
+    # 士气
+    if t.morale >= 1.08:
+        morale_text = "队内士气高涨，全员信心十足"
+    elif t.morale >= 1.02:
+        morale_text = "队内气氛良好，球员之间信任度高"
+    elif t.morale >= 0.96:
+        morale_text = "队内气氛正常，专注比赛本身"
+    else:
+        morale_text = "队内士气一般，需要胜利来提振信心"
+
+    # 身价排名参考
+    if t.squad_value > 800:
+        value_text = f"球队总身价高达{t.squad_value:.0f}百万欧元，属于世界顶级豪门级别"
+    elif t.squad_value > 400:
+        value_text = f"球队总身价约{t.squad_value:.0f}百万欧元，属于欧洲一流强队水准"
+    elif t.squad_value > 200:
+        value_text = f"球队总身价约{t.squad_value:.0f}百万欧元，属于中游偏上的实力水平"
+    elif t.squad_value > 80:
+        value_text = f"球队总身价约{t.squad_value:.0f}百万欧元，属于典型的中游球队"
+    else:
+        value_text = f"球队总身价约{t.squad_value:.0f}百万欧元，属于相对弱势的一方"
+
+    # FIFA排名
+    rank_text = f"国际足联排名第{t.fifa_ranking}位"
+
+    html = f"""
+    <div class="ta-item">
+        <div class="ta-label">👨‍💼 教练与战术</div>
+        <div class="ta-value">{d.get('coach', '未知')} | {d.get('style', '未知')} | {d.get('formation', '未知')}</div>
+    </div>
+    <div class="ta-item">
+        <div class="ta-label">🤝 队伍磨合度</div>
+        <div class="ta-value">{d.get('cohesion', '未知')} — {d.get('morale_desc', '')}</div>
+    </div>
+    <div class="ta-item">
+        <div class="ta-label">⭐ 关键球员</div>
+        <div class="ta-value">{d.get('key_players', '暂无信息')}</div>
+    </div>
+    <div class="ta-item">
+        <div class="ta-label">🔥 核心优势</div>
+        <div class="ta-value ta-positive">{d.get('strengths', '')}</div>
+    </div>
+    <div class="ta-item">
+        <div class="ta-label">⚠️ 潜在短板</div>
+        <div class="ta-value ta-negative">{d.get('weaknesses', '')}</div>
+    </div>
+    <div class="ta-item">
+        <div class="ta-label">📈 进攻能力评估</div>
+        <div class="ta-value">{attack_text}</div>
+    </div>
+    <div class="ta-item">
+        <div class="ta-label">🛡️ 防守能力评估</div>
+        <div class="ta-value">{defense_text}</div>
+    </div>
+    <div class="ta-item">
+        <div class="ta-label">📊 近期竞技状态</div>
+        <div class="ta-value">{form_text}</div>
+    </div>
+    <div class="ta-item">
+        <div class="ta-label">❤️ 队内士气氛围</div>
+        <div class="ta-value">{morale_text}</div>
+    </div>
+    <div class="ta-item ta-last">
+        <div class="ta-label">💰 阵容价值 & 排名</div>
+        <div class="ta-value">{value_text} | {rank_text}</div>
+    </div>
+    """
+    return html
+
+
+def generate_upset_analysis(result, home_name, away_name):
+    """
+    爆冷比分捕捉：当强弱队对阵时，基于模型概率数据分析可能的冷门比分。
+    所有推荐均有泊松分布模型概率作为数据支撑。
+    """
+    home_t = WORLD_CUP_TEAMS_2026.get(home_name)
+    away_t = WORLD_CUP_TEAMS_2026.get(away_name)
+    if not home_t or not away_t:
+        return ""
+
+    # 判断强弱差距（FIFA排名差距或elo差距）
+    rank_gap = abs(home_t.fifa_ranking - away_t.fifa_ranking)
+    elo_gap = abs(home_t.elo_rating - away_t.elo_rating)
+
+    # 差距足够大才显示爆冷分析
+    is_strong_weak = (rank_gap >= 20 and elo_gap >= 80)
+    if not is_strong_weak:
+        return ""
+
+    # 判断谁是强队谁是弱队
+    if home_t.fifa_ranking < away_t.fifa_ranking:
+        strong, weak = home_name, away_name
+        strong_t, weak_t = home_t, away_t
+    else:
+        strong, weak = away_name, home_name
+        strong_t, weak_t = away_t, home_t
+
+    strong_cn = tcn(strong)
+    weak_cn = tcn(weak)
+
+    # 计算弱队获胜的总概率（来自泊松模型）
+    if strong == home_name:
+        weak_win_prob = result.away_win_prob * 100  # 客队（弱）胜
+        draw_prob = result.draw_prob * 100
+    else:
+        weak_win_prob = result.home_win_prob * 100  # 主队（弱）胜
+        draw_prob = result.draw_prob * 100
+
+    # 从score_probabilities中找弱队赢球的比分（概率>0.5%的冷门比分，有模型依据）
+    upset_scores = []
+    for (h, a), prob in result.score_probabilities.items():
+        prob_pct = prob * 100
+        if prob_pct < 0.5:
+            continue
+        # 弱队赢（包括小胜和平局冷门）
+        is_cold = False
+        if strong == home_name and a > h:  # 客队（弱）胜或平且意外
+            is_cold = True
+            score_display = f"{h}:{a}"
+        elif strong == away_name and h > a:  # 主队（弱）胜
+            is_cold = True
+            score_display = f"{h}:{a}"
+        if is_cold:
+            upset_scores.append((score_display, prob_pct))
+
+    upset_scores.sort(key=lambda x: -x[1])
+
+    # 爆冷因子分析（每条都有数据来源标注）
+    weak_d = TEAM_DESC.get(weak, {})
+    strong_d = TEAM_DESC.get(strong, {})
+
+    # 量化爆冷风险等级
+    if weak_win_prob >= 25:
+        risk_level = "中等"
+        risk_color = "#f59e0b"
+    elif weak_win_prob >= 15:
+        risk_level = "较低"
+        risk_color = "#3b82f6"
+    else:
+        risk_level = "低"
+        risk_color = "#9ca3af"
+
+    upset_factors = [
+        f"📊 <strong>模型数据</strong>：泊松分布模拟显示{weak_cn}胜出概率为 {weak_win_prob:.1f}%，平局 {draw_prob:.1f}%",
+        f"🏆 <strong>排名落差</strong>：FIFA排名相差 {rank_gap} 位（{strong_cn}#{strong_t.fifa_ranking} vs {weak_cn}#{weak_t.fifa_ranking}）",
+        f"⚡ <strong>ELO分差</strong>：实力分相差 {elo_gap:.0f} 分，但世界杯历史上ELO差距>100仍出现过多场冷门",
+        f"🎯 <strong>{weak_cn}优势</strong>：{weak_d.get('strengths', '拼搏精神旺盛')}",
+        f"🔻 <strong>{strong_cn}隐患</strong>：{strong_d.get('weaknesses', '可能轻敌')}",
+        f"🌪️ <strong>触发条件</strong>：若{weak_cn}早早进球，{strong_cn}心态可能出现波动",
+    ]
+
+    upset_html = f"""
+    <div style="margin-top:18px;background:linear-gradient(135deg,rgba(239,68,68,.05),rgba(245,158,11,.08));border:1.5px solid rgba(239,68,68,.2);border-radius:16px;padding:18px;overflow:hidden;position:relative">
+        <div style="position:absolute;top:-1px;left:20px;right:20px;height:3px;background:linear-gradient(90deg,#ef4444,#f59e0b);border-radius:3px"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+            <span style="font-size:1.5em">🧊</span>
+            <span style="font-size:1.05em;font-weight:800;color:#ef4444">爆冷比分预警</span>
+            <span style="font-size:.7em;background:rgba(239,68,68,.12);color:#ef4444;padding:2px 10px;border-radius:10px;font-weight:600">强弱悬殊</span>
+            <span style="font-size:.7em;background:{risk_color}18;color:{risk_color};padding:2px 10px;border-radius:10px;font-weight:600">爆冷风险: {risk_level}</span>
+        </div>
+        <div style="font-size:.84em;color:#555;margin-bottom:14px;line-height:1.6">
+            {strong_cn}(FIFA第{strong_t.fifa_ranking}位) vs {weak_cn}(FIFA第{weak_t.fifa_ranking}位)
+            · 模型计算{weak_cn}胜率 <strong>{weak_win_prob:.1f}%</strong>
+        </div>
+
+        <!-- 冷门比分卡片（全部来自泊松模型概率分布） -->
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+        """
+
+    for i, (score_display, prob_pct) in enumerate(upset_scores[:4]):
+        upset_html += f"""
+        <div style="flex:1;min-width:110px;text-align:center;background:rgba(255,255,255,.75);border-radius:12px;padding:12px 8px;border:1px solid rgba(239,68,68,.15)">
+            <div style="font-size:1.4em;font-weight:900;color:#ef4444">{score_display}</div>
+            <div style="font-size:.72em;color:#888;margin-top:4px">模型概率 {prob_pct:.1f}%</div>
+            <div style="font-size:.65em;color:#ef4444;font-weight:600;margin-top:2px">泊松分布推导</div>
+        </div>
+        """
+
+    upset_html += """
+        </div>
+
+        <!-- 数据依据 -->
+        <div style="background:rgba(255,255,255,.55);border-radius:10px;padding:12px">
+            <div style="font-size:.78em;font-weight:700;color:#ef4444;margin-bottom:8px">📋 数据依据与爆冷因子</div>
+    """
+
+    for factor in upset_factors:
+        upset_html += f'<div style="font-size:.76em;color:#444;padding:4px 0;border-bottom:1px solid rgba(0,0,0,.04);line-height:1.55">{factor}</div>'
+
+    upset_html += f"""
+        </div>
+        <div style="margin-top:12px;text-align:center">
+            <span style="font-size:.7em;color:#888;background:rgba(245,158,11,.08);padding:4px 14px;border-radius:10px;display:inline-block;line-height:1.4">
+                ⚠️ 以上冷门比分均由泊松分布模型概率分布推导得出<br>
+                仅供参考，不构成投注建议。实际赔率请以博彩公司为准。
+            </span>
+        </div>
+    </div>
+    """
+    return upset_html
+
+
+def generate_prediction_rationale(result, home_name, away_name):
+    """生成预测依据：只展示推荐比分+冷门比分两个选项，含球队信息。"""
+    home_d = TEAM_DESC.get(home_name, {})
+    away_d = TEAM_DESC.get(away_name, {})
+    home_t = WORLD_CUP_TEAMS_2026.get(home_name)
+    away_t = WORLD_CUP_TEAMS_2026.get(away_name)
+
+    home_cn = tcn(home_name)
+    away_cn = tcn(away_name)
+
+    # 蒙特卡洛模拟胜平负
+    mc_home_win = result.home_win_prob * 100
+    mc_draw = result.draw_prob * 100
+    mc_away_win = result.away_win_prob * 100
+
+    # 推荐比分（最可能）
+    rec_h, rec_a = result.most_likely_score
+    rec_prob = result.score_probabilities.get((rec_h, rec_a), 0) * 100
+
+    # 冷门比分：找弱队赢或大比分差异的次高概率结果
+    cold_h, cold_a = None, None
+    cold_prob = 0
+    # 判断谁是弱队
+    if home_t and away_t:
+        home_weaker = home_t.fifa_ranking > away_t.fifa_ranking
+    else:
+        home_weaker = False
+
+    for (h, a), prob in result.score_probabilities.items():
+        pct = prob * 100
+        if pct < 1.5:  # 太低概率的不算
+            continue
+        is_cold = False
+        if home_weaker and h > a:  # 主队是弱队但主队赢
+            is_cold = True
+        elif not home_weaker and a > h:  # 客队是弱队但客队赢
+            is_cold = True
+        # 也包括意外的大比分平局或大胜
+        elif abs(h - a) >= 2 and pct >= 2:
+            is_cold = True
+
+        if is_cold and pct > cold_prob and (h, a) != (rec_h, rec_a):
+            cold_h, cold_a = h, a
+            cold_prob = pct
+
+    # 如果没找到冷门，取第二可能的非相同比分为冷门备选
+    if cold_h is None:
+        sorted_scores = sorted(result.score_probabilities.items(), key=lambda x: -x[1])
+        for (h, a), prob in sorted_scores:
+            if (h, a) != (rec_h, rec_a):
+                cold_h, cold_a = h, a
+                cold_prob = prob * 100
+                break
+
+    probs = [("home", mc_home_win, f"{home_cn}胜"), ("draw", mc_draw, "平局"), ("away", mc_away_win, f"{away_cn}胜")]
+    probs.sort(key=lambda x: -x[1])
+    top_result_label = probs[0][2]
+    top_result_pct = probs[0][1]
+
+    # 构建依据文本
+    rationales = []
+    if home_t and away_t:
+        if abs(home_t.fifa_ranking - away_t.fifa_ranking) > 10:
+            better = home_cn if home_t.fifa_ranking < away_t.fifa_ranking else away_cn
+            worse = away_cn if home_t.fifa_ranking < away_t.fifa_ranking else home_cn
+            rationales.append(f"实力对比：{better}排名优势明显，{worse}需超常发挥才能拿分。")
+        else:
+            rationales.append(f"实力接近：双方FIFA排名相近，胜负取决于临场发挥和战术执行。")
+    if home_d.get("strengths") or away_d.get("strengths"):
+        hs = home_d.get("strengths", "")[:20]
+        aws = away_d.get("weaknesses", "")[:20]
+        if hs and aws:
+            rationales.append(f"对位分析：{home_cn}{hs}，可能克制{away_cn}{aws}。")
+    if home_d.get("coach") and away_d.get("coach"):
+        rationales.append(f"教练博弈：{home_cn}{home_d['coach']} vs {away_cn}{away_d['coach']}，两种不同战术理念的碰撞。")
+    if home_d.get("morale_desc") or away_d.get("morale_desc"):
+        m1 = home_d.get("morale_desc", "")
+        m2 = away_d.get("morale_desc", "")
+        if m1 or m2:
+            rationales.append(f"心理因素：{m1 or m2}")
+
+    rationale_html = ""
+    for r in rationales:
+        rationale_html += f'<div style="font-size:.82em;color:#444;padding:6px 0 6px 14px;border-left:3px solid var(--accent);line-height:1.65;background:rgba(45,138,62,.03);margin-bottom:6px;border-radius:0 8px 8px 0">{r}</div>'
+
+    confidence_text = result.confidence_label()
+
+    # 球队信息摘要
+    team_info_html = f"""
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+        <div style="background:var(--bg);border-radius:10px;padding:10px;text-align:center">
+            <div style="font-size:.9em;font-weight:700;color:var(--accent)">{home_cn}</div>
+            <div style="font-size:.68em;color:var(--dim);margin-top:2px">{home_d.get('coach','?')} · {home_d.get('style','?')}</div>
+            <div style="font-size:.65em;color:#999;margin-top:2px">核心: {home_d.get('key_players','?')[:25]}</div>
+        </div>
+        <div style="background:var(--bg);border-radius:10px;padding:10px;text-align:center">
+            <div style="font-size:.9em;font-weight:700;color:var(--accent2)">{away_cn}</div>
+            <div style="font-size:.68em;color:var(--dim);margin-top:2px">{away_d.get('coach','?')} · {away_d.get('style','?')}</div>
+            <div style="font-size:.65em;color:#999;margin-top:2px">核心: {away_d.get('key_players','?')[:25]}</div>
+        </div>
+    </div>
+    """
+
+    final_html = f"""
+    <div style="background:linear-gradient(135deg,rgba(45,138,62,.05),rgba(196,160,53,.03));border:1px solid rgba(45,138,62,.12);border-radius:14px;padding:18px;margin-top:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:1.3em">🎯</span>
+                <span style="font-size:1em;font-weight:800;color:var(--accent)">AI预测推荐</span>
+            </div>
+            <span style="font-size:.72em;background:var(--grad);color:#fff;padding:3px 12px;border-radius:12px;font-weight:700">置信度 {confidence_text}</span>
+        </div>
+
+        {team_info_html}
+
+        <!-- 双比分展示 -->
+        <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:14px;margin-bottom:16px">
+
+            <!-- 推荐比分 -->
+            <div style="text-align:center;background:linear-gradient(135deg,rgba(45,138,62,.06),rgba(45,138,62,.02));border:1.5px solid rgba(45,138,62,.2);border-radius:14px;padding:16px">
+                <div style="display:inline-block;font-size:.7em;background:var(--accent);color:#fff;padding:2px 10px;border-radius:8px;font-weight:600;margin-bottom:8px">推荐比分</div>
+                <div style="font-size:2.4em;font-weight:900;color:var(--accent);letter-spacing:4px">{rec_h}:{rec_a}</div>
+                <div style="font-size:.75em;color:var(--dim);margin-top:4px">概率 {rec_prob:.1f}%</div>
+                <div style="font-size:.72em;color:var(--accent);font-weight:600;margin-top:6px">🏆 {top_result_label} · {top_result_pct:.0f}%</div>
+            </div>
+
+            <!-- 冷门比分 -->
+            <div style="text-align:center;background:linear-gradient(135deg,rgba(239,68,68,.05),rgba(245,158,11,.04));border:1.5px solid rgba(239,68,68,.18);border-radius:14px;padding:16px">
+                <div style="display:inline-block;font-size:.7em;background:linear-gradient(135deg,#ef4444,#f59e0b);color:#fff;padding:2px 10px;border-radius:8px;font-weight:600;margin-bottom:8px">冷门比分</div>
+                <div style="font-size:2em;font-weight:900;color:#ef4444;letter-spacing:3px">{cold_h}:{cold_a}</div>
+                <div style="font-size:.75em;color:var(--dim);margin-top:4px">概率 {cold_prob:.1f}%</div>
+                <div style="font-size:.7em;color:#d97706;font-weight:500;margin-top:6px">💰 高赔率选择</div>
+            </div>
+
+        </div>
+
+        <!-- 胜平负概率条 -->
+        <div style="margin-bottom:14px">
+            <div style="font-size:.76em;color:var(--dim);margin-bottom:8px">蒙特卡洛模拟（10000次）</div>"""
+
+    for i, (key, pct, label) in enumerate(probs):
+        colors = ["var(--accent)", "#f59e0b", "#ef4444"]
+        final_html += f"""
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+                <span style="font-size:.74em;width:40px">{label}</span>
+                <div style="flex:1;height:20px;background:var(--bg);border-radius:10px;overflow:hidden;position:relative">
+                    <div style="height:100%;width:{min(pct,100)}%;background:{colors[i]};border-radius:10px"></div>
+                    <span style="position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:.66em;font-weight:700;color:#fff">{pct:.0f}%</span>
+                </div>
+            </div>"""
+
+    final_html += f"""
+        </div>
+
+        <!-- 预测依据 -->
+        <div style="font-size:.82em;font-weight:700;color:var(--accent);margin-bottom:8px">📋 预测依据</div>
+        {rationale_html}
+    </div>
+    """
+    return final_html
+
+
+def handle_match_detail(token, home_name, away_name):
+    """Single match detail page - base data public, predictions require purchase (except warmup)."""
+    premium, _ptype, _reason = check_premium(token)
+    home = data_manager.get_dynamic_team(home_name, use_player_data=True)
+    away = data_manager.get_dynamic_team(away_name, use_player_data=True)
+    if not home or not away:
+        return "HTTP/1.0 404 Not Found\r\nContent-Type: text/html\r\n\r\n<h1>404 Not Found</h1>"
+
+    # Determine match stage and price
+    stage_key, stage_label, match_price = get_match_stage_and_price(home_name, away_name)
+
+    result = predictor.predict(home, away, MatchStage.GROUP)
+    sc = f'{result.most_likely_score[0]}:{result.most_likely_score[1]}'
+
+    # Chinese team names
+    home_cn = tcn(home_name)
+    away_cn = tcn(away_name)
+
+    # Define match benefits by stage
+    match_benefits = {
+        "group": [
+            "完整量化分析报告", "比分概率热力图", "总进球数概率分析",
+            "推荐关注波胆（2个）", "盘口资金流向预警", "舆情热度分析",
+            "赛后复盘归因报告", "赛前2h重点预警"
+        ],
+        "knockout": [
+            "完整量化分析报告", "比分概率热力图", "总进球数概率分析",
+            "加时/点球专项分析", "推荐关注波胆（2个）", "盘口资金流向预警",
+            "舆情热度分析", "赛后复盘归因报告", "赛前2h重点预警"
+        ],
+        "semi": [
+            "完整量化分析报告", "比分概率热力图", "总进球数概率分析",
+            "加时/点球专项分析", "推荐关注波胆（2个）", "盘口资金流向预警",
+            "舆情热度分析", "赛后复盘归因报告", "赛前2h重点预警",
+            "分析师1v1答疑"
+        ],
+        "final": [
+            "完整量化分析报告", "比分概率热力图", "总进球数概率分析",
+            "加时/点球专项分析", "压力测试专项分析", "推荐关注波胆（2个）",
+            "盘口资金流向预警", "舆情热度分析", "赛后复盘归因报告", "赛前2h重点预警"
+        ],
+    }
+    benefits = match_benefits.get(stage_key, match_benefits["group"])
+    benefits_html = "".join([f'<li style="padding:6px 0;font-size:.85em;border-bottom:1px solid rgba(255,255,255,.06)"><span style="color:var(--accent2);margin-right:6px">✓</span>{b}</li>' for b in benefits])
+
+    # Base stats - visible to ALL users (文字描述替代数值，公开)
+    home_analysis = generate_text_analysis(home_name)
+    away_analysis = generate_text_analysis(away_name)
+    base_stats = f"""
+    <div class="ta-grid">
+        <div class="ta-team-block">
+            <h3 class="ta-team-title" style="color:var(--accent)">{home_cn}</h3>
+            {home_analysis}
+        </div>
+        <div class="ta-team-block">
+            <h3 class="ta-team-title" style="color:var(--accent2)">{away_cn}</h3>
+            {away_analysis}
+        </div>
+    </div>"""
+
+    # Prediction stats - only for premium users (单一比分+文字依据+爆冷分析)
+    if premium:
+        # 单一推荐比分 + 文字依据
+        rationale_html = generate_prediction_rationale(result, home_name, away_name)
+        # 爆冷比分捕捉
+        upset_html = generate_upset_analysis(result, home_name, away_name)
+
+        prediction_section = f"""
+        {rationale_html}
+        {upset_html}
+        <div style="text-align:center;margin-top:18px">
+            <a href="/report/{home_name}/{away_name}" class="btn btn-primary btn-sm" style="text-decoration:none;color:#fff;font-size:.85em;padding:10px 24px">📋 查看完整分析报告</a>
+        </div>
+        """
+    else:
+        prediction_section = f"""
+        <div class="card" style="text-align:center;padding:32px;margin-top:20px">
+            <div style="font-size:2.5em;margin-bottom:12px">🔒</div>
+            <h2 style="margin-bottom:8px;font-size:1.1em">{stage_label} · {html.escape(home_cn)} vs {html.escape(away_cn)}</h2>
+            <p style="color:var(--dim);margin-bottom:20px;font-size:.85em">购买后即可查看完整分析报告与AI预测结果</p>
+
+            <!-- Benefits preview -->
+            <div style="text-align:left;background:rgba(45,138,62,.06);border:1px solid rgba(45,138,62,.15);border-radius:12px;padding:16px 20px;margin-bottom:20px">
+                <h4 style="font-size:.85em;color:var(--accent2);margin-bottom:8px">📋 本报告包含以下内容：</h4>
+                <ul style="list-style:none;padding:0">{benefits_html}</ul>
+            </div>
+
+            <!-- Purchase CTA -->
+            <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:12px">
+                <a href="/payment?match={urllib.parse.quote(home_name)}&vs={urllib.parse.quote(away_name)}&stage={stage_key}" class="btn btn-primary" style="background:linear-gradient(135deg,#C4A035,#2D8A3E);text-decoration:none;color:#fff">
+                    购买单场 ¥{match_price}
+                </a>
+                <a href="/payment?plan=all" class="btn btn-outline" style="text-decoration:none">
+                    全车套餐 ¥2999
+                </a>
+            </div>
+            <p style="font-size:.75em;color:var(--dim)">购买单场仅限本场比赛 · 全车套餐覆盖全部104场</p>
+        </div>
+        """
+
+    username = get_session_user(token) or ""
+    content = f"""
+    <div class="match-detail" style="max-width:700px;margin:0 auto">
+        <div style="text-align:center;padding:30px 0">
+            <div style="display:flex;justify-content:center;align-items:center;gap:30px;font-size:1.3em;font-weight:600">
+                <div><div class="tbadge" style="background:var(--accent);margin:0 auto 8px;width:50px;height:50px;font-size:1.2em">{home_cn[0]}</div><div>{html.escape(home_cn)}</div><div style="font-size:.7em;color:var(--dim);font-weight:400">FIFA #{home.fifa_ranking}</div></div>
+                <div style="font-size:4em;font-weight:700;background:var(--grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent">{sc if premium else "?:?"}</div>
+                <div><div class="tbadge" style="background:var(--accent2);margin:0 auto 8px;width:50px;height:50px;font-size:1.2em">{away_cn[0]}</div><div>{html.escape(away_cn)}</div><div style="font-size:.7em;color:var(--dim);font-weight:400">FIFA #{away.fifa_ranking}</div></div>
+            </div>
+            <div style="margin-top:12px"><span style="background:rgba(196,160,53,.12);color:var(--accent2);padding:4px 14px;border-radius:20px;font-size:.8em;font-weight:500">{stage_label}</span></div>
+        </div>
+
+        <!-- Base data - public to all -->
+        <div class="card">
+            <h3 style="margin-bottom:16px">📋 球队分析</h3>
+            <p style="font-size:.8em;color:var(--dim);margin-bottom:12px">教练风格 · 战术体系 · 球员状态 · 综合评估</p>
+            {base_stats}
+        </div>
+
+        <!-- Prediction section -->
+        {prediction_section}
+    </div>
+    """
+    return render_page(f"{home_cn} vs {away_cn} - 波胆教父", content, "matches", premium, username)
+
+
+def handle_pricing(token):
+    """Pricing page - redesigned with clear Regular vs Hot match categories."""
+    premium, _ptype, _reason = check_premium(token)
+    username = get_session_user(token) or ""
+
+    if premium:
+        content = """
+        <div class="page-header"><h1>您已是付费会员</h1><p>享受全部104场比赛完整预测报告</p></div>
+        <div style="text-align:center"><a href="/matches" class="btn btn-primary">查看全部赛事</a></div>"""
+    else:
+        content = """
+        <div class="page-header"><h1>购买预测服务</h1><p>2026世界杯全程AI量化预测</p></div>
+
+        <!-- Group Stage: Regular vs Hot Matches -->
+        <section class="section">
+            <h2 class="section-title">小组赛单场购买</h2>
+            <div style="max-width:900px;margin:0 auto">
+                <div class="card-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin-bottom:20px">
+                    <!-- Regular Matches -->
+                    <div class="pricing-card" style="border-color:var(--border)">
+                        <div style="font-size:1em;margin-bottom:8px"><span style="background:rgba(45,138,62,.12);color:#2D8A3E;padding:4px 12px;border-radius:12px;font-size:.85em">小组赛 · 普通场次</span></div>
+                        <div class="pricing-price" style="font-size:2.2em">¥69<span style="font-size:.4em;color:var(--dim)">/场</span></div>
+                        <p style="color:var(--dim);font-size:.85em;margin-bottom:16px">常规对阵，标准分析</p>
+                        <ul class="pricing-features">
+                            <li>完整量化分析报告</li>
+                            <li>比分概率热力图</li>
+                            <li>总进球数概率分析</li>
+                            <li>推荐关注波胆（2个）</li>
+                            <li>盘口资金流向预警</li>
+                            <li>舆情热度分析</li>
+                            <li>赛后复盘归因报告</li>
+                            <li>赛前2h重点预警</li>
+                        </ul>
+                        <div style="margin-top:16px">
+                            <a href="/select-match?plan=single" class="btn btn-primary" style="width:100%;text-decoration:none;color:#fff">选购普通场次</a>
+                        </div>
+                    </div>
+                    <!-- Hot Matches -->
+                    <div class="pricing-card featured" style="border-color:var(--accent2);box-shadow:0 0 30px rgba(196,160,53,.15)">
+                        <div style="font-size:1em;margin-bottom:8px"><span style="background:rgba(196,160,53,.12);color:#C4A035;padding:4px 12px;border-radius:12px;font-size:.85em">小组赛 · 热门场次 🔥</span></div>
+                        <div class="pricing-price" style="font-size:2.2em">¥129<span style="font-size:.4em;color:var(--dim)">/场</span></div>
+                        <p style="color:var(--dim);font-size:.85em;margin-bottom:16px">强强对决，深度分析</p>
+                        <ul class="pricing-features">
+                            <li><strong>全部10项分析内容</strong></li>
+                            <li>比分概率热力图</li>
+                            <li>总进球数概率分析</li>
+                            <li>推荐关注波胆（2个）</li>
+                            <li>盘口资金流向预警</li>
+                            <li>舆情热度分析</li>
+                            <li>赛后复盘归因报告</li>
+                            <li>赛前2h重点预警</li>
+                        </ul>
+                        <div style="margin-top:16px">
+                            <a href="/select-match?plan=hot" class="btn btn-primary" style="width:100%;text-decoration:none;color:#fff;background:linear-gradient(135deg,#C4A035,#2D8A3E)">选购热门场次</a>
+                        </div>
+                    </div>
+                </div>
+                <div class="card" style="text-align:center;padding:16px;background:rgba(196,160,53,.04)">
+                    <p style="font-size:.85em;color:var(--dim)">💡 热门场次：传统强队之间的对决（如巴西vs德国、法国vs阿根廷等），提供更深度的盘口分析和阵容克制解读</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Knockout Stage -->
+        <section class="section">
+            <h2 class="section-title">淘汰赛单场购买</h2>
+            <div style="max-width:900px;margin:0 auto">
+                <div class="card-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px">
+                    <div class="pricing-card" style="border-color:var(--border)">
+                        <div style="font-size:1em;margin-bottom:8px"><span style="background:rgba(6,182,212,.12);color:#06B6D4;padding:4px 12px;border-radius:12px;font-size:.85em">1/8 + 1/4决赛</span></div>
+                        <div class="pricing-price" style="font-size:1.8em">¥169<span style="font-size:.4em;color:var(--dim)">/场</span></div>
+                        <ul class="pricing-features" style="font-size:.85em">
+                            <li>全部10项分析</li>
+                            <li>加时/点球专项</li>
+                            <li>波胆推荐（2个）</li>
+                        </ul>
+                        <a href="/select-match?plan=knockout" class="btn btn-outline" style="width:100%;margin-top:12px;text-decoration:none">选购</a>
+                    </div>
+                    <div class="pricing-card" style="border-color:var(--accent2)">
+                        <div style="font-size:1em;margin-bottom:8px"><span style="background:rgba(245,158,11,.12);color:#F59E0B;padding:4px 12px;border-radius:12px;font-size:.85em">半决赛</span></div>
+                        <div class="pricing-price" style="font-size:1.8em">¥269<span style="font-size:.4em;color:var(--dim)">/场</span></div>
+                        <ul class="pricing-features" style="font-size:.85em">
+                            <li>全部10项分析</li>
+                            <li>加时/点球专项</li>
+                            <li>分析师1v1答疑</li>
+                        </ul>
+                        <a href="/select-match?plan=semifinal" class="btn btn-outline" style="width:100%;margin-top:12px;text-decoration:none">选购</a>
+                    </div>
+                    <div class="pricing-card" style="border-color:#EF4444">
+                        <div style="font-size:1em;margin-bottom:8px"><span style="background:rgba(239,68,68,.12);color:#EF4444;padding:4px 12px;border-radius:12px;font-size:.85em">决赛 🔥</span></div>
+                        <div class="pricing-price" style="font-size:1.8em;color:#EF4444">¥398<span style="font-size:.4em;color:var(--dim)">/场</span></div>
+                        <ul class="pricing-features" style="font-size:.85em">
+                            <li>全部10项分析</li>
+                            <li>压力测试专项</li>
+                            <li>巅峰之战压轴</li>
+                        </ul>
+                        <a href="/select-match?plan=final" class="btn btn-outline" style="width:100%;margin-top:12px;text-decoration:none">选购</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Full Package -->
+        <section class="section">
+            <h2 class="section-title">全程套餐</h2>
+            <div style="max-width:600px;margin:0 auto">
+                <div class="pricing-card featured" style="border-color:var(--accent2);box-shadow:0 0 40px rgba(196,160,53,.2)">
+                    <div style="font-size:1em;margin-bottom:8px"><span style="background:var(--grad);color:#fff;padding:4px 16px;border-radius:12px;font-size:.9em">👑 世界杯全车套餐</span></div>
+                    <div class="pricing-price">¥2999</div>
+                    <p style="color:var(--dim);font-size:.9em;margin-bottom:20px">一次购买 · 全程覆盖 · 104场</p>
+                    <ul class="pricing-features">
+                        <li>全部104场比赛完整报告</li>
+                        <li>所有赛段10项分析内容</li>
+                        <li>比分概率热力图（全比分矩阵）</li>
+                        <li>总进球数概率分析（0~7+球）</li>
+                        <li>推荐关注波胆（精选2个）</li>
+                        <li>盘口资金流向预警</li>
+                        <li>舆情热度分析</li>
+                        <li>赛后复盘归因报告</li>
+                        <li>加时/点球专项分析</li>
+                        <li>深度报告 + 阵容克制解读</li>
+                        <li>赛前2h重点预警</li>
+                        <li>分析师全程1v1服务</li>
+                        <li>VIP专属微信群</li>
+                    </ul>
+                    <div style="margin-top:20px">
+                        <a href="/payment?plan=all" class="btn btn-primary" style="width:100%;text-decoration:none;color:#fff;background:linear-gradient(135deg,#C4A035,#2D8A3E);font-size:1.1em;padding:16px">立即购买全车套餐</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <div class="card" style="max-width:600px;margin:0 auto;text-align:center">
+            <h3 style="margin-bottom:16px">📱 扫码付款</h3>
+            <p style="color:var(--dim);font-size:.85em;margin-bottom:16px">付款后截图发送给客服，5分钟内开通权限</p>
+            <div style="display:flex;justify-content:center;gap:30px;flex-wrap:wrap">
+                <div>
+                    <img src="/static/assets/wechat-pay.png" alt="微信支付" style="width:180px;height:180px;object-fit:contain;border-radius:8px;border:1px solid var(--border)">
+                    <p style="margin-top:8px;font-size:.85em">微信支付: AckNoveArthur</p>
+                </div>
+                <div>
+                    <img src="/static/assets/alipay.jpg" alt="支付宝" style="width:180px;height:180px;object-fit:contain;border-radius:8px;border:1px solid var(--border)">
+                    <p style="margin-top:8px;font-size:.85em">支付宝: 广州葵花鸡</p>
+                </div>
+            </div>
+            <div style="margin-top:16px;padding:12px;background:rgba(255,215,0,0.1);border-radius:8px;border:1px solid rgba(255,215,0,0.3)">
+                <p style="font-size:.85em;color:var(--warn)">💡 付款后请截图并联系客服微信: <strong>balldan_2026</strong>，我们会在5分钟内为您开通权限。</p>
+            </div>
+        </div>
+        """
+
+    return render_page("购买服务 - 波胆教父", content, "price", premium, username)
+
+
+def handle_payment(token, plan="all", match_home=None, match_away=None, match_stage=None):
+    """Payment page with QR codes.
+    Supports both package plans (plan=xxx) and single match purchase (match, vs, stage params).
+    """
+    premium, _ptype, _reason = check_premium(token)
+    username = get_session_user(token) or ""
+
+    # Single match purchase mode
+    if match_home and match_away and match_stage:
+        stage_labels = {"group": "小组赛", "knockout": "淘汰赛", "semi": "半决赛", "final": "决赛"}
+        stage_prices = {"group": 69, "knockout": 169, "semi": 269, "final": 398}
+        stage_label = stage_labels.get(match_stage, "单场")
+        price = stage_prices.get(match_stage, 69)
+        p = {
+            "name": f"{stage_label} · {match_home} vs {match_away}",
+            "price": price,
+            "desc": f"单场完整分析报告（{match_home} vs {match_away}）",
+            "type": "single_match",
+            "stage": match_stage,
+        }
+    else:
+        # Package plans (existing logic)
+        plans = {
+            "single": {"name": "小组赛普通场", "price": 66, "desc": "单场完整量化分析报告", "type": "package"},
+            "hot": {"name": "小组赛热门场", "price": 129, "desc": "热门对决完整分析+资金流向", "type": "package"},
+            "knockout": {"name": "淘汰赛", "price": 199, "desc": "淘汰赛加强版+加时点球分析", "type": "package"},
+            "semifinal": {"name": "半决赛", "price": 269, "desc": "半决赛全部权益+1v1答疑", "type": "package"},
+            "final": {"name": "决赛", "price": 399, "desc": "决赛专项分析+完整报告", "type": "package"},
+            "all": {"name": "世界杯全车套餐", "price": 2999, "desc": "全部104场比赛完整预测报告", "type": "package"},
+        }
+        p = plans.get(plan, plans["all"])
+
+    # Build benefits list based on purchase type
+    if p.get("type") == "single_match":
+        match_benefits = {
+            "group": ["完整量化分析报告", "比分概率热力图", "总进球数概率分析", "推荐关注波胆（2个）", "盘口资金流向预警", "舆情热度分析", "赛后复盘归因报告", "赛前2h重点预警"],
+            "knockout": ["完整量化分析报告", "比分概率热力图", "总进球数概率分析", "加时/点球专项分析", "推荐关注波胆（2个）", "盘口资金流向预警", "舆情热度分析", "赛后复盘归因报告", "赛前2h重点预警"],
+            "semi": ["完整量化分析报告", "比分概率热力图", "总进球数概率分析", "加时/点球专项分析", "推荐关注波胆（2个）", "盘口资金流向预警", "舆情热度分析", "赛后复盘归因报告", "赛前2h重点预警", "分析师1v1答疑"],
+            "final": ["完整量化分析报告", "比分概率热力图", "总进球数概率分析", "加时/点球专项分析", "压力测试专项分析", "推荐关注波胆（2个）", "盘口资金流向预警", "舆情热度分析", "赛后复盘归因报告", "赛前2h重点预警"],
+        }
+        benefits = match_benefits.get(p.get("stage", "group"), match_benefits["group"])
+    else:
+        # Package benefits
+        if plan == "all":
+            benefits = ["全部104场比赛完整报告", "所有赛段10项分析内容", "比分概率热力图（全比分矩阵）", "总进球数概率分析（0~7+球）", "推荐关注波胆（精选2个）", "盘口资金流向预警", "舆情热度分析", "赛后复盘归因报告", "加时/点球专项分析", "深度报告 + 阵容克制解读", "赛前2h重点预警", "分析师全程1v1服务", "VIP专属微信群"]
+        elif plan == "final":
+            benefits = ["全部10项分析内容", "加时/点球专项分析", "压力测试专项分析", "推荐关注波胆（2个）", "盘口资金流向预警", "舆情热度分析", "赛后复盘归因报告", "赛前2h重点预警"]
+        elif plan == "semifinal":
+            benefits = ["全部10项分析内容", "加时/点球专项分析", "总进球数概率分析", "推荐关注波胆（2个）", "盘口资金流向预警", "舆情热度分析", "赛后复盘归因报告", "赛前2h重点预警"]
+        elif plan in ("knockout", "hot"):
+            benefits = ["全部10项分析内容", "加时/点球专项分析", "总进球数概率分析", "推荐关注波胆（2个）", "盘口资金流向预警", "舆情热度分析", "赛后复盘归因报告", "赛前2h重点预警"]
+        else:
+            benefits = ["完整量化分析报告", "比分概率热力图", "总进球数概率分析", "推荐关注波胆（2个）", "盘口资金流向预警", "舆情热度分析", "赛后复盘归因报告", "赛前2h重点预警"]
+
+    benefits_html = "".join([f'<li style="padding:8px 0;font-size:.88em;border-bottom:1px solid var(--border);display:flex;align-items:center"><span style="color:var(--accent2);margin-right:10px;font-size:1.1em">✓</span>{b}</li>' for b in benefits])
+
+    # Payment method selector state
+    content = f"""
+    <div class="page-header">
+        <h1>支付购买</h1>
+        <p>微信 · 支付宝 · 安全便捷</p>
+    </div>
+
+    <section class="section">
+        <div class="card" style="max-width:500px;margin:0 auto 20px">
+            <h3 style="font-size:1rem;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)"><span style="color:var(--accent2)">🛒</span> 订单确认</h3>
+            <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:.9em"><span>{p['name']}</span><span style="font-weight:700">¥{p['price']}</span></div>
+            <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:.9em;color:var(--dim)"><span>服务期限</span><span>2026世界杯全程</span></div>
+            <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:.9em;color:var(--dim)"><span>权益</span><span style="text-align:right;max-width:200px">{p['desc']}</span></div>
+            <div style="display:flex;justify-content:space-between;padding:12px 0;margin-top:8px;border-top:1px solid var(--border);font-size:1.1em;font-weight:800;color:var(--warn)"><span>应付金额</span><span>¥{p['price']}</span></div>
+        </div>
+    </section>
+
+    <!-- Benefits detail -->
+    <section class="section">
+        <div class="card" style="max-width:500px;margin:0 auto 20px">
+            <details open>
+                <summary style="cursor:pointer;font-size:1rem;font-weight:600;color:var(--text);list-style:none;outline:none;display:flex;align-items:center;justify-content:space-between">
+                    <span><span style="color:var(--accent2);margin-right:6px">📋</span> 权益详情</span>
+                    <span style="font-size:.8em;color:var(--dim)">点击收起</span>
+                </summary>
+                <ul style="list-style:none;padding:0;margin-top:12px">{benefits_html}</ul>
+            </details>
+        </div>
+    </section>
+
+    <section class="section">
+        <div style="max-width:500px;margin:0 auto">
+            <h3 style="text-align:center;font-size:1rem;margin-bottom:16px">选择支付方式</h3>
+            <div style="display:flex;gap:16px;justify-content:center;margin-bottom:20px;flex-wrap:wrap">
+                <div class="card" style="text-align:center;width:180px;border-color:#07C160;cursor:pointer" onclick="selectPayment('wechat')" id="wechat-card">
+                    <div style="font-size:2rem;margin-bottom:6px">💚</div>
+                    <div style="font-weight:700;font-size:.95em">微信支付</div>
+                    <div style="font-size:.75em;color:var(--dim)">推荐使用</div>
+                </div>
+                <div class="card" style="text-align:center;width:180px;border-color:#1677FF;cursor:pointer" onclick="selectPayment('alipay')" id="alipay-card">
+                    <div style="font-size:2rem;margin-bottom:6px">💙</div>
+                    <div style="font-weight:700;font-size:.95em">支付宝</div>
+                    <div style="font-size:.75em;color:var(--dim)">支持花呗</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section">
+        <div style="max-width:500px;margin:0 auto;text-align:center">
+            <!-- WeChat QR (default visible) -->
+            <div id="wechat-qr" style="display:block">
+                <img src="/static/assets/wechat-pay.png" alt="微信支付" style="width:220px;height:220px;object-fit:contain;border-radius:12px;border:2px solid #07C160;background:#fff;padding:10px">
+                <p style="margin-top:10px;font-size:.9em;font-weight:600;color:#07C160">微信扫码支付</p>
+                <p style="margin-top:4px;font-size:.8em;color:var(--dim)">收款方：AckNoveArthur</p>
+            </div>
+            <!-- Alipay QR (hidden by default) -->
+            <div id="alipay-qr" style="display:none">
+                <img src="/static/assets/alipay.jpg" alt="支付宝" style="width:220px;height:220px;object-fit:contain;border-radius:12px;border:2px solid #1677FF;background:#fff;padding:10px">
+                <p style="margin-top:10px;font-size:.9em;font-weight:600;color:#1677FF">支付宝扫码支付</p>
+                <p style="margin-top:4px;font-size:.8em;color:var(--dim)">收款方：广州葵花鸡</p>
+            </div>
+            <p style="font-size:1.2em;font-weight:800;color:var(--warn);margin-top:16px">应付金额：¥{p['price']}</p>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="card" style="max-width:500px;margin:0 auto;background:rgba(16,185,129,0.05);border-color:rgba(16,185,129,0.2)">
+            <h4 style="color:#10B981;margin-bottom:10px;font-size:.95em"><span style="margin-right:4px">📋</span> 付款后请按以下步骤操作</h4>
+            <ol style="padding-left:1.2rem;font-size:.85em;color:var(--dim);line-height:1.8">
+                <li>点击上方支付方式，使用微信或支付宝扫描对应二维码完成付款</li>
+                <li>截图保存付款成功页面（含付款时间、金额、流水号）</li>
+                <li>添加微信客服 <strong style="color:var(--text)">balldan_2026</strong>，发送付款截图</li>
+                <li>客服核实后将在 <strong style="color:var(--text)">5分钟内</strong> 为您开通对应权限</li>
+                <li>开通后刷新页面即可查看完整预测报告</li>
+            </ol>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="card" style="max-width:500px;margin:0 auto;background:rgba(239,68,68,0.05);border-color:rgba(239,68,68,0.2)">
+            <h4 style="font-size:.9rem;color:#EF4444;margin-bottom:8px"><span style="margin-right:4px">🛡️</span> 安全提醒</h4>
+            <ul style="font-size:.82rem;color:var(--dim);padding-left:1.2rem;line-height:1.7">
+                <li>请务必确认收款方名称：<strong style="color:var(--text)">微信支付 - AckNoveArthur</strong> / <strong style="color:var(--text)">支付宝 - 广州葵花鸡</strong></li>
+                <li>付款金额请与订单金额一致，请勿多付或少付</li>
+                <li>本网站不提供任何博彩投注服务，仅提供数据分析报告</li>
+                <li>所有预测仅供参考，不构成任何投注建议</li>
+            </ul>
+        </div>
+    </section>
+
+    <script>
+    function selectPayment(method) {{
+        const wc = document.getElementById('wechat-qr');
+        const ali = document.getElementById('alipay-qr');
+        const wcCard = document.getElementById('wechat-card');
+        const aliCard = document.getElementById('alipay-card');
+        if (method === 'wechat') {{
+            wc.style.display = 'block';
+            ali.style.display = 'none';
+            wcCard.style.background = 'rgba(7,193,96,0.08)';
+            wcCard.style.borderColor = '#07C160';
+            aliCard.style.background = '';
+            aliCard.style.borderColor = 'var(--border)';
+        }} else {{
+            wc.style.display = 'none';
+            ali.style.display = 'block';
+            aliCard.style.background = 'rgba(22,119,255,0.08)';
+            aliCard.style.borderColor = '#1677FF';
+            wcCard.style.background = '';
+            wcCard.style.borderColor = 'var(--border)';
+        }}
+    }}
+    // Default: highlight WeChat
+    selectPayment('wechat');
+    </script>
+    """
+    return render_page("支付购买 - 波胆教父", content, "price", premium, username)
+
+
+def handle_select_match(token):
+    """Select matches page - user chooses which matches to purchase."""
+    premium, _ptype, _reason = check_premium(token)
+    username = get_session_user(token) or ""
+
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+    plan = query.get("plan", ["all"])[0]
+
+    # Define plan details
+    plan_info = {
+        "single": {"name": "小组赛普通场", "price": 69, "desc": "选择单场小组赛（普通场次）"},
+        "hot": {"name": "小组赛热门场", "price": 129, "desc": "选择单场小组赛（热门场次）"},
+        "knockout": {"name": "淘汰赛", "price": 169, "desc": "选择单场淘汰赛"},
+        "semifinal": {"name": "半决赛", "price": 269, "desc": "选择单场半决赛"},
+        "final": {"name": "决赛", "price": 398, "desc": "选择单场决赛"},
+        "all": {"name": "世界杯全车套餐", "price": 2999, "desc": "全部104场比赛"},
+    }
+
+    p = plan_info.get(plan, plan_info["all"])
+
+    # Get all matches
+    predictions = get_all_predictions()
+
+    # Filter matches based on plan
+    if plan == "all":
+        # Show all matches for full package
+        filtered_matches = predictions
+        match_type_label = "全部104场比赛"
+    elif plan == "single":
+        # Group stage regular matches (non-popular teams)
+        filtered_matches = [p for p in predictions if hasattr(p, 'group') and p.group and p.group != "KO"][:48]  # First 48 group matches
+        match_type_label = "小组赛普通场次"
+    elif plan == "hot":
+        # Group stage hot matches (popular teams)
+        hot_teams = ["Brazil", "Argentina", "Germany", "France", "Spain", "England", "Portugal", "Italy", "Netherlands", "Belgium"]
+        filtered_matches = [p for p in predictions if hasattr(p, 'group') and p.group and p.group != "KO" and (p.home_team in hot_teams or p.away_team in hot_teams)][:20]
+        match_type_label = "小组赛热门场次"
+    elif plan == "knockout":
+        # Knockout stage matches
+        filtered_matches = [p for p in predictions if hasattr(p, 'group') and p.group == "KO"]
+        match_type_label = "淘汰赛"
+    elif plan == "semifinal":
+        # Semi-final matches
+        filtered_matches = [p for p in predictions if hasattr(p, 'group') and p.group == "KO" and "SF" in str(p)]
+        match_type_label = "半决赛"
+    elif plan == "final":
+        # Final match
+        filtered_matches = [p for p in predictions if hasattr(p, 'group') and p.group == "KO" and "FIN" in str(p)]
+        match_type_label = "决赛"
+    else:
+        filtered_matches = predictions
+        match_type_label = "全部比赛"
+
+    # Build matches HTML
+    matches_html = ""
+    for i, p in enumerate(filtered_matches):
+        home_cn = tcn(p.home_team)
+        away_cn = tcn(p.away_team)
+        match_id = f"{p.home_team}_{p.away_team}"
+
+        # Determine if this is a hot match
+        is_hot = any(team in ["Brazil", "Argentina", "Germany", "France", "Spain", "England", "Portugal", "Italy"] for team in [p.home_team, p.away_team])
+        hot_badge = '<span style="background:rgba(196,160,53,.12);color:#C4A035;padding:2px 6px;border-radius:4px;font-size:.7em;margin-left:8px">热门</span>' if is_hot else ''
+
+        matches_html += f"""
+        <div class="match-select-item" style="display:flex;align-items:center;gap:12px;padding:12px;border-bottom:1px solid var(--border);cursor:pointer" onclick="toggleMatch('{match_id}')">
+            <input type="checkbox" id="{match_id}" name="matches" value="{match_id}" style="width:18px;height:18px;cursor:pointer">
+            <div style="flex:1">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                    <span style="font-weight:600">{home_cn}</span>
+                    <span style="color:var(--dim)">vs</span>
+                    <span style="font-weight:600">{away_cn}</span>
+                    {hot_badge}
+                </div>
+                <div style="font-size:.78em;color:var(--dim)">
+                    {p.most_likely_score[0]}:{p.most_likely_score[1]} · 置信度{p.confidence*100:.0f}%
+                </div>
+            </div>
+            <div style="font-size:.9em;font-weight:700;color:var(--accent2)">
+                ¥{p.get('price', 69)}
+            </div>
+        </div>
+        """
+
+    content = f"""
+    <div class="page-header">
+        <h1>选择比赛</h1>
+        <p>{p['name']} · {match_type_label}</p>
+    </div>
+
+    <div class="card" style="max-width:800px;margin:0 auto">
+        <div style="padding:16px;border-bottom:1px solid var(--border)">
+            <h3 style="font-size:1em;margin-bottom:8px">📋 订单信息</h3>
+            <div style="display:flex;justify-content:space-between;font-size:.9em">
+                <span>{p['name']}</span>
+                <span style="font-weight:700;color:var(--accent2)">¥{p['price']}</span>
+            </div>
+            <p style="font-size:.82em;color:var(--dim);margin-top:8px">{p['desc']}</p>
+        </div>
+
+        <form method="post" action="/payment" id="selectForm">
+            <input type="hidden" name="plan" value="{plan}">
+            <div style="max-height:500px;overflow-y:auto">
+                {matches_html if matches_html else '<div style="padding:40px;text-align:center;color:var(--dim)">暂无可用比赛</div>'}
+            </div>
+
+            <div style="padding:16px;border-top:1px solid var(--border);background:rgba(255,255,255,.02)">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                    <span style="font-size:.9em">已选择 <span id="selectedCount">0</span> 场比赛</span>
+                    <span style="font-size:1.1em;font-weight:700;color:var(--warn)">合计: ¥<span id="totalPrice">{p['price']}</span></span>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%;padding:14px;font-size:1em">
+                    确认选择并支付
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+    let totalPrice = {p['price']};
+    let selectedCount = 0;
+
+    function toggleMatch(id) {{
+        const checkbox = document.getElementById(id);
+        checkbox.checked = !checkbox.checked;
+        updateSummary();
+    }}
+
+    function updateSummary() {{
+        const checkboxes = document.querySelectorAll('input[name="matches"]:checked');
+        selectedCount = checkboxes.length;
+        document.getElementById('selectedCount').textContent = selectedCount;
+
+        // Calculate total price
+        let total = {p['price'] if plan == 'all' else 0};
+        if ('{plan}' !== 'all') {{
+            total = selectedCount * {p['price']};
+        }}
+        document.getElementById('totalPrice').textContent = total;
+    }}
+
+    // Select all button
+    function selectAll() {{
+        document.querySelectorAll('input[name="matches"]').forEach(cb => cb.checked = true);
+        updateSummary();
+    }}
+
+    function deselectAll() {{
+        document.querySelectorAll('input[name="matches"]').forEach(cb => cb.checked = false);
+        updateSummary();
+    }}
+    </script>
+    """
+
+    return render_page("选择比赛 - 波胆教父", content, "", premium, username)
+
+
+def handle_login(token, error_msg=""):
+    """Login page."""
+    premium, _ptype, _reason = check_premium(token)
+    if premium:
+        return handle_home(token)
+    error_html = ""
+    if error_msg:
+        error_html = f'<p style="color:var(--danger);font-size:.85em;margin-bottom:12px">{html.escape(error_msg)}</p>'
+    content = f"""
+    <div class="login-box">
+        <h2 style="text-align:center;margin-bottom:24px">登录 / 注册</h2>
+        {error_html}
+        <form method="post" action="/login">
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" name="username" class="form-input" placeholder="输入用户名" required>
+                <p style="font-size:.75em;color:var(--dim);margin-top:4px">3-20位，支持中文、字母、数字、下划线</p>
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" name="password" class="form-input" placeholder="输入密码" required>
+                <p style="font-size:.75em;color:var(--dim);margin-top:4px">至少6位</p>
+            </div>
+            <button type="submit" name="action" value="login" class="btn btn-primary" style="width:100%">登录</button>
+        </form>
+        <hr style="border-color:var(--border);margin:20px 0">
+        <form method="post" action="/login">
+            <div class="form-group">
+                <label>新用户名</label>
+                <input type="text" name="username" class="form-input" placeholder="设置用户名" required>
+                <p style="font-size:.75em;color:var(--dim);margin-top:4px">3-20位，支持中文、字母、数字、下划线</p>
+            </div>
+            <div class="form-group">
+                <label>设置密码</label>
+                <input type="password" name="password" class="form-input" placeholder="设置密码" required>
+                <p style="font-size:.75em;color:var(--dim);margin-top:4px">至少6位</p>
+            </div>
+            <button type="submit" name="action" value="register" class="btn btn-outline" style="width:100%">注册新账号</button>
+        </form>
+        <p style="text-align:center;color:var(--dim);font-size:.82em;margin-top:16px">已有账号？直接登录上方表单</p>
+    </div>"""
+    return render_page("登录 - 波胆教父", content, "", premium)
+
+
+def handle_warmup(token):
+    """Warmup matches page - real API data, clean card-style layout."""
+    try:
+        from warmup_data import WARMUP_MATCHES
+    except ImportError:
+        WARMUP_MATCHES = []
+
+    if not WARMUP_MATCHES:
+        content = """
+    <div class="wu-hero"><h1>⚽ 热身赛免费专栏</h1><p>世界杯前热身赛AI预测 · 完全免费</p></div>
+    <div class="wu-empty"><div class="wu-empty-icon">📡</div>热身赛数据正在从API同步中，请稍后刷新...</div>"""
+        return render_page("热身赛 - 波胆教父", content, "warmup", False)
+
+    # Stats
+    total = len(WARMUP_MATCHES)
+    finished = sum(1 for m in WARMUP_MATCHES if m.get("status") == "已结束")
+    upcoming = total - finished
+    # Count WC teams involved
+    wc_teams_involved = set()
+    for m in WARMUP_MATCHES:
+        for side in ("home", "away"):
+            name = m.get(side, "")
+            if WORLD_CUP_TEAMS_2026.get(name):
+                wc_teams_involved.add(tcn(name))
+    teams_count = len(wc_teams_involved)
+
+    # Group matches by date
+    from collections import OrderedDict
+    matches_by_date = OrderedDict()
+    for m in WARMUP_MATCHES:
+        d = m["date"]
+        if d not in matches_by_date:
+            matches_by_date[d] = []
+        matches_by_date[d].append(m)
+
+    # Build match cards
+    cards_html = ""
+    for date_str, day_matches in matches_by_date.items():
+        # Format date display
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+            date_display = f"{dt.month}月{dt.day}日 {weekday_names[dt.weekday()]}"
+        except:
+            date_display = date_str
+
+        day_count = len(day_matches)
+        day_finished = sum(1 for m in day_matches if m.get("status") == "已结束")
+        cards_html += f'<div class="wu-section-title">{date_display}<span class="wu-date-tag"> · {day_count}场 · {day_finished}场已结束</span></div>'
+
+        for m in day_matches:
+            status_text = m.get("status", "未开始")
+            is_finished = status_text == "已结束"
+            is_live = status_text == "进行中"
+
+            if is_finished:
+                badge_class = "wu-badge-done"
+                badge_text = "已结束"
+            elif is_live:
+                badge_class = "wu-badge-live"
+                badge_text = "进行中"
+            else:
+                badge_class = "wu-badge-soon"
+                badge_text = "未开始"
+
+            home_cn = tcn(m["home"])
+            away_cn = tcn(m["away"])
+            ht = WORLD_CUP_TEAMS_2026.get(m["home"])
+            at = WORLD_CUP_TEAMS_2026.get(m["away"])
+            home_rank = f"第{ht.fifa_ranking}位" if ht else ""
+            away_rank = f"第{at.fifa_ranking}位" if at else ""
+
+            # Score or VS
+            if is_finished and m.get("home_score") is not None:
+                score_html = f'<div class="wu-score"><span class="wu-score-home">{m["home_score"]}</span><span class="wu-score-dash">-</span><span class="wu-score-away">{m["away_score"]}</span></div>'
+            else:
+                score_html = f'<div class="wu-vs">VS</div>'
+
+            # Time
+            time_html = f'<div class="wu-time">{m["time"]}</div>'
+
+            # Venue
+            venue = m.get("venue", "")
+            venue_html = f'<div class="wu-venue">{venue}</div>' if venue else ""
+
+            # AI prediction (only for WC teams vs any team)
+            analysis_html = ""
+            if is_finished:
+                # For finished matches, show prediction accuracy review
+                home = data_manager.get_dynamic_team(m["home"], use_player_data=True)
+                away = data_manager.get_dynamic_team(m["away"], use_player_data=True)
+                if home and away:
+                    result = predictor.predict(home, away, MatchStage.GROUP)
+                    top3 = result.top_scores(3)
+                    actual = (m["home_score"], m["away_score"])
+                    hit = any(s == actual for s, p in top3)
+                    hit_text = "✅ 命中" if hit else "❌ 未命中"
+                    hit_color = "var(--accent)" if hit else "var(--danger)"
+                    # Top 5
+                    top5_html = ""
+                    for (h, a), prob in result.top_scores(5):
+                        is_actual = (h == actual[0] and a == actual[1])
+                        row_style = f"color:var(--accent);font-weight:700" if is_actual else ""
+                        top5_html += f'<div class="wu-score-row"><span style="{row_style}">{home_cn} {h}-{a} {away_cn}{" ← 实际" if is_actual else ""}</span><span class="wu-score-prob" style="{row_style}">{prob*100:.1f}%</span></div>'
+                    analysis_html = f"""
+                    <div class="wu-predict">
+                        <div class="wu-predict-title">🎯 预测回顾</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
+                            <div class="wu-predict-item"><div class="wu-predict-label">预期进球</div><div class="wu-predict-value">{result.lambda_home:.1f} - {result.lambda_away:.1f}</div></div>
+                            <div class="wu-predict-item"><div class="wu-predict-label">胜/平/负</div><div class="wu-predict-value" style="font-size:.9em">{result.home_win_prob*100:.0f}%/{result.draw_prob*100:.0f}%/{result.away_win_prob*100:.0f}%</div></div>
+                            <div class="wu-predict-item"><div class="wu-predict-label">波胆命中</div><div class="wu-predict-value" style="color:{hit_color}">{hit_text}</div></div>
+                        </div>
+                        <div class="wu-scores-list">{top5_html}</div>
+                    </div>"""
+            else:
+                # For upcoming matches, show prediction
+                home = data_manager.get_dynamic_team(m["home"], use_player_data=True)
+                away = data_manager.get_dynamic_team(m["away"], use_player_data=True)
+                if home and away:
+                    result = predictor.predict(home, away, MatchStage.GROUP)
+
+                    # 推荐比分（最可能）
+                    rec_h, rec_a = result.most_likely_score
+                    rec_prob = result.score_probabilities.get((rec_h, rec_a), 0) * 100
+
+                    # 冷门/高赔率比分
+                    ht_w = WORLD_CUP_TEAMS_2026.get(m["home"])
+                    at_w = WORLD_CUP_TEAMS_2026.get(m["away"])
+                    home_weaker = (ht_w and at_w and ht_w.fifa_ranking > at_w.fifa_ranking)
+
+                    cold_h, cold_a = None, None
+                    cold_prob = 0
+                    sorted_scores = sorted(result.score_probabilities.items(), key=lambda x: -x[1])
+                    for (h, a), prob in sorted_scores:
+                        pct = prob * 100
+                        if (h, a) == (rec_h, rec_a): continue
+                        is_cld = False
+                        if pct >= 1.5:
+                            if home_weaker and h > a: is_cld = True
+                            elif not home_weaker and a > h: is_cld = True
+                            elif h + a >= 4: is_cld = True
+                        if is_cld and pct > cold_prob:
+                            cold_h, cold_a, cold_prob = h, a, pct
+                    if cold_h is None:
+                        for (h, a), prob in sorted_scores:
+                            if (h, a) != (rec_h, rec_a):
+                                cold_h, cold_a, cold_prob = h, a, prob * 100
+                                break
+
+                    # 完整概率表格 Top 12
+                    prob_rows = ""
+                    for i, ((h, a), prob) in enumerate(sorted_scores[:12]):
+                        pct = prob * 100
+                        is_rec = (h == rec_h and a == rec_a)
+                        is_clm = (h == cold_h and a == cold_a)
+                        tag = ""
+                        rs = ""
+                        if is_rec:
+                            tag = '<span style="font-size:.6em;background:var(--accent);color:#fff;padding:1px 6px;border-radius:6px;margin-left:4px">推荐</span>'
+                            rs = "background:rgba(45,138,62,.04);font-weight:700"
+                        elif is_clm:
+                            tag = '<span style="font-size:.6em;background:#ef4444;color:#fff;padding:1px 6px;border-radius:6px;margin-left:4px">冷门</span>'
+                            rs = "background:rgba(239,68,68,.03)"
+                        prob_rows += f'<div class="wu-score-row" style="{rs}"><span>{home_cn} {h}-{a} {away_cn}{tag}</span><span class="wu-score-prob">{pct:.1f}%</span></div>'
+
+                    mc_hw = result.home_win_prob * 100
+                    mc_dr = result.draw_prob * 100
+                    mc_aw = result.away_win_prob * 100
+
+                    analysis_html = f"""
+                    <div class="wu-predict">
+                        <div class="wu-predict-title">AI预测分析（完整概率版）</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+                            <div style="text-align:center;background:linear-gradient(135deg,rgba(45,138,62,.08),rgba(45,138,62,.02));border:1.5px solid rgba(45,138,62,.25);border-radius:12px;padding:12px">
+                                <div style="font-size:.65em;color:var(--accent);font-weight:600;margin-bottom:4px">推荐比分</div>
+                                <div style="font-size:1.7em;font-weight:900;color:var(--accent);letter-spacing:3px">{rec_h}:{rec_a}</div>
+                                <div style="font-size:.72em;color:var(--dim)">概率 {rec_prob:.1f}%</div>
+                            </div>
+                            <div style="text-align:center;background:linear-gradient(135deg,rgba(239,68,68,.06),rgba(245,158,11,.04));border:1.5px solid rgba(239,68,68,.2);border-radius:12px;padding:12px">
+                                <div style="font-size:.65em;color:#ef4444;font-weight:600;margin-bottom:4px">冷门/高赔率</div>
+                                <div style="font-size:1.5em;font-weight:900;color:#ef4444;letter-spacing:2px">{cold_h}:{cold_a}</div>
+                                <div style="font-size:.72em;color:var(--dim)">概率 {cold_prob:.1f}%</div>
+                            </div>
+                        </div>
+                        <div style="margin-bottom:10px">
+                            <div style="display:flex;align-items:center;gap:5px;margin-bottom:4px"><span style="font-size:.72em;width:28px;font-weight:600">{home_cn}胜</span><div style="flex:1;height:16px;background:var(--bg);border-radius:8px;overflow:hidden"><div style="height:100%;width:{min(mc_hw,100)}%;background:var(--accent);border-radius:8px"></div></div><span style="font-size:.66em;color:var(--accent);font-weight:700">{mc_hw:.0f}%</span></div>
+                            <div style="display:flex;align-items:center;gap:5px;margin-bottom:4px"><span style="font-size:.72em;width:28px;font-weight:600">平局</span><div style="flex:1;height:16px;background:var(--bg);border-radius:8px;overflow:hidden"><div style="height:100%;width:{min(mc_dr,100)}%;background:#f59e0b;border-radius:8px"></div></div><span style="font-size:.66em;color:#d97706;font-weight:700">{mc_dr:.0f}%</span></div>
+                            <div style="display:flex;align-items:center;gap:5px"><span style="font-size:.72em;width:28px;font-weight:600">{away_cn}胜</span><div style="flex:1;height:16px;background:var(--bg);border-radius:8px;overflow:hidden"><div style="height:100%;width:{min(mc_aw,100)}%;background:#ef4444;border-radius:8px"></div></div><span style="font-size:.66em;color:#ef4444;font-weight:700">{mc_aw:.0f}%</span></div>
+                        </div>
+                        <div style="font-size:.75em;color:var(--dim);margin:8px 0 4px;font-weight:600">全部比分概率（泊松分布）</div>
+                        <div class="wu-scores-list">{prob_rows}</div>
+                        <div class="wu-predict-rec">推荐波胆 <b>{rec_h}:{rec_a}</b> | 冷门关注 <b>{cold_h}:{cold_a}</b>（高赔率）</div>
+                    </div>"""
+                else:
+                    analysis_html = '<div style="margin-top:8px;font-size:.82em;color:var(--dim);padding:8px;text-align:center">预测分析将在开赛前24小时内发布</div>'
+
+            cards_html += f"""
+        <div class="wu-card">
+            <div class="wu-card-head">
+                <span class="wu-card-date">{m['time']}</span>
+                <span class="wu-card-badge {badge_class}">{badge_text}</span>
+            </div>
+            <div class="wu-card-body">
+                <div class="wu-team wu-team-l">
+                    <div class="wu-team-name">{home_cn}</div>
+                    <div class="wu-team-sub">{home_rank}</div>
+                </div>
+                <div class="wu-center">
+                    {score_html}
+                    {venue_html}
+                </div>
+                <div class="wu-team wu-team-r">
+                    <div class="wu-team-name">{away_cn}</div>
+                    <div class="wu-team-sub">{away_rank}</div>
+                </div>
+            </div>
+            {analysis_html}
+        </div>"""
+
+    content = f"""
+    <div class="wu-hero">
+        <h1>⚽ 热身赛免费专栏</h1>
+        <p>世界杯前热身赛AI预测 · 完全免费 · 数据来源API-Football</p>
+        <div class="wu-stats">
+            <div class="wu-stat"><div class="wu-stat-num">{total}</div><div class="wu-stat-label">总场次</div></div>
+            <div class="wu-stat"><div class="wu-stat-num">{finished}</div><div class="wu-stat-label">已结束</div></div>
+            <div class="wu-stat"><div class="wu-stat-num">{upcoming}</div><div class="wu-stat-label">待开赛</div></div>
+        </div>
+    </div>
+    <div class="wu-filter" id="wu-filter">
+        <button class="wu-filter-btn wu-filter-active" onclick="filterWarmup('all')">全部 ({total})</button>
+        <button class="wu-filter-btn" onclick="filterWarmup('done')">已结束 ({finished})</button>
+        <button class="wu-filter-btn" onclick="filterWarmup('soon')">待开赛 ({upcoming})</button>
+    </div>
+    <div id="wu-matches">{cards_html}</div>
+    <div class="wu-cta-row">
+        <a href="/matches" class="btn btn-primary">查看世界杯正赛赛程</a>
+        <a href="/products" class="btn btn-outline">购买正赛预测</a>
+    </div>
+    <script>
+    function filterWarmup(type){{
+        var cards=document.querySelectorAll('.wu-card,.wu-section-title');
+        var btns=document.querySelectorAll('.wu-filter-btn');
+        btns.forEach(function(b){{b.classList.remove('wu-filter-active')}});
+        event.target.classList.add('wu-filter-active');
+        var sectionVisible=false;
+        for(var i=0;i<cards.length;i++){{
+            var el=cards[i];
+            if(el.classList.contains('wu-section-title')){{
+                sectionVisible=false;
+                if(type==='all'){{el.style.display='';sectionVisible=true}}
+                else{{el.style.display='none'}}
+            }} else {{
+                var badge=el.querySelector('.wu-card-badge');
+                if(!badge)continue;
+                var status=badge.textContent;
+                var show=false;
+                if(type==='all')show=true;
+                else if(type==='done'&&(status==='已结束'))show=true;
+                else if(type==='soon'&&(status==='未开始'||status==='进行中'))show=true;
+                el.style.display=show?'':'none';
+                if(show)sectionVisible=true;
+            }}
+        }}
+        // Show section titles that have visible cards below
+        var sections=document.querySelectorAll('.wu-section-title');
+        for(var j=0;j<sections.length;j++){{
+            var next=sections[j].nextElementSibling;
+            var hasVisible=false;
+            while(next&&!next.classList.contains('wu-section-title')){{
+                if(next.style.display!=='none')hasVisible=true;
+                next=next.nextElementSibling;
+            }}
+            if(type==='all'||hasVisible)sections[j].style.display='';
+            else sections[j].style.display='none';
+        }}
+    }}
+    </script>"""
+    return render_page("热身赛 - 波胆教父", content, "warmup", False)
+
+
+def handle_admin(token):
+    """Admin results entry page."""
+    username = get_session_user(token)
+    if username != "admin":
+        return render_page("管理后台 - 波胆教父", '<div style="text-align:center;padding:60px 20px"><div style="font-size:4em;margin-bottom:16px">🚫</div><h1>403 禁止访问</h1><p style="color:var(--dim)">此区域仅限管理员访问。</p></div>', "", True)
+
+    premium = True
+    history = data_manager.get_match_history(50)
+
+    # Build pending matches list (group stage, no result yet)
+    pending_html = ""
+    completed_html = ""
+    for home_name, away_name, rn in GROUP_STAGE_MATCHUPS:
+        exists = any(
+            m.get('home') == home_name and m.get('away') == away_name
+            for m in history
+        )
+        if exists:
+            completed_html += f'<div class="gmatch" style="opacity:.6"><span>{home_name} vs {away_name}</span><span style="color:var(--success)">已录入</span></div>'
+        else:
+            pending_html += f"""
+            <div class="gmatch">
+                <span style="min-width:160px">{home_name} vs {away_name}</span>
+                <form method="post" action="/api/admin/result" style="display:inline-flex;gap:6px;align-items:center">
+                    <input type="hidden" name="home" value="{html.escape(home_name)}">
+                    <input type="hidden" name="away" value="{html.escape(away_name)}">
+                    <input type="hidden" name="stage" value="group">
+                    <input type="number" name="home_goals" min="0" max="20" required
+                           style="width:45px;padding:4px;border-radius:4px;background:var(--bg);border:1px solid var(--border);color:var(--text);text-align:center">
+                    <span>:</span>
+                    <input type="number" name="away_goals" min="0" max="20" required
+                           style="width:45px;padding:4px;border-radius:4px;background:var(--bg);border:1px solid var(--border);color:var(--text);text-align:center">
+                    <button type="submit" class="btn btn-sm btn-primary" style="padding:4px 12px;font-size:.8em">提交</button>
+                </form>
+            </div>"""
+
+    # Scheduler status
+    sched = get_scheduler()
+    sched_status = sched.get_status()
+    sched_color = "var(--success)" if sched_status["is_alive"] else "var(--danger)"
+    sched_text = "运行中" if sched_status["is_alive"] else "已停止"
+    api_color = "var(--success)" if sched_status["api_configured"] else "var(--warn)"
+    api_text = "已配置" if sched_status["api_configured"] else "未设置（离线模式）"
+
+    # Team strength with player data
+    integrator = get_team_integrator()
+    integ_status = integrator.get_status()
+
+    # Player-based team strength table
+    player_team_rows = ""
+    for name in sorted(WORLD_CUP_TEAMS_2026.keys()):
+        report = integrator.get_team_report(name)
+        summary = data_manager.get_team_summary(name)
+        recent = "".join(summary.get('recent_results', []))
+        overall_color = "var(--accent2)" if report["overall"] >= 1.0 else "var(--warn)"
+        player_team_rows += f"""
+        <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:6px 8px;font-weight:600">{html.escape(name)}</td>
+            <td style="padding:6px 8px;text-align:center">{summary.get('current_elo',0):.0f}</td>
+            <td style="padding:6px 8px;text-align:center">{report.get('league_quality',0):.3f}</td>
+            <td style="padding:6px 8px;text-align:center;color:{overall_color};font-weight:600">{report.get('overall',1.0):.4f}</td>
+            <td style="padding:6px 8px;text-align:center">{report.get('player_count',0)}</td>
+            <td style="padding:6px 8px;text-align:center">
+                <span style="color:{'var(--danger)' if report.get('injured_count',0) > 0 else 'var(--success)'}">
+                    {report.get('injured_count',0)}
+                </span>
+            </td>
+            <td style="padding:6px 8px;text-align:center;font-size:.85em;color:var(--dim)">{recent}</td>
+        </tr>"""
+
+    # Top 5 key players from top teams
+    top_players = []
+    for name in sorted(WORLD_CUP_TEAMS_2026.keys())[:12]:
+        report = integrator.get_team_report(name)
+        for p in report.get("predicted_xi", [])[:3]:
+            top_players.append((name, p))
+    top_players = top_players[:15]
+
+    top_player_html = ""
+    for team_name, p in top_players:
+        pos_color = {"Goalkeeper": "#C4A035", "Defender": "#2D8A3E", "Midfielder": "#ffd700", "Forward": "#ff6b6b"}.get(p.get("position", ""), "#889")
+        top_player_html += f"""
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:.85em">
+            <span><span style="color:var(--dim)">{html.escape(team_name[:3])}</span> {html.escape(p.get('name',''))}</span>
+            <span><span style="color:{pos_color};font-size:.75em;padding:1px 6px;border-radius:4px;background:rgba(255,255,255,.05)">{p.get('position','')[:4]}</span>
+            <span style="color:var(--accent2);font-weight:600;margin-left:8px">{p.get('overall',0)}</span></span>
+        </div>"""
+
+    # Match history
+    hist_rows = ""
+    for m in reversed(history[-30:]):
+        hist_rows += f"""
+        <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:4px 8px;font-size:.85em">{html.escape(tcn(m.get('home','')))}</td>
+            <td style="padding:4px 8px;text-align:center;font-weight:600">{m.get('home_goals','?')}:{m.get('away_goals','?')}</td>
+            <td style="padding:4px 8px;font-size:.85em">{html.escape(tcn(m.get('away','')))}</td>
+            <td style="padding:4px 8px;text-align:center;font-size:.78em;color:var(--dim)">{m.get('stage','group')}</td>
+        </tr>"""
+
+    # Build admin prediction report quick-access links
+    report_links_html = ""
+    schedule = load_schedule()
+    current_group = ""
+    for m in schedule:
+        hm, aw = m.get("home",""), m.get("away","")
+        grp = m.get("group", m.get("round", "未知"))
+        md = m.get("date", "")
+        mt = m.get("time", "")
+        if grp != current_group:
+            if current_group:
+                report_links_html += '</tbody></table></div></section><section class="section"><h2 class="section-title">' + html.escape(str(grp)) + ' 预测报告</h2><div style="max-width:900px;margin:0 auto;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.85em"><thead><tr style="color:var(--accent2);font-size:.8em"><th style="padding:6px 8px;text-align:left">日期</th><th style="padding:6px 8px;text-align:left">对阵</th><th style="padding:6px 8px;text-align:center">操作</th></tr></thead><tbody>'
+            else:
+                report_links_html += '<section class="section"><h2 class="section-title">' + html.escape(str(grp)) + ' 预测报告</h2><div style="max-width:900px;margin:0 auto;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.85em"><thead><tr style="color:var(--accent2);font-size:.8em"><th style="padding:6px 8px;text-align:left">日期</th><th style="padding:6px 8px;text-align:left">对阵</th><th style="padding:6px 8px;text-align:center">操作</th></tr></thead><tbody>'
+            current_group = grp
+        hmq = urllib.parse.quote(hm)
+        awq = urllib.parse.quote(aw)
+        report_links_html += '<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px 8px;font-size:.8em;color:var(--dim)">' + html.escape(str(md)) + ' ' + html.escape(str(mt)) + '</td><td style="padding:6px 8px;font-weight:600">' + html.escape(tcn(hm)) + ' <span style="color:var(--dim)">vs</span> ' + html.escape(tcn(aw)) + '</td><td style="padding:6px 8px;text-align:center"><a href="/report/' + hmq + '/' + awq + '" target="_blank" class="btn btn-sm btn-outline" style="font-size:.72em;padding:3px 10px">查看报告</a></td></tr>'
+    if report_links_html:
+        report_links_html += "</tbody></table></div></section>"
+    else:
+        report_links_html = '<section class="section"><h2 class="section-title">预测报告</h2><p style="color:var(--dim);padding:12px">暂无赛程数据</p></section>'
+
+    content = f"""
+    <div class="page-header"><h1>管理后台</h1><p>比赛结果录入 · 预测报告 · 球员状态 · 系统健康</p></div>
+
+    <div class="card-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:24px">
+        <div class="card"><div class="num" style="color:var(--accent2)">{sched_status["cycle_count"]}</div><div class="label">刷新周期数</div></div>
+        <div class="card"><div class="num" style="font-size:1.5em;color:{sched_color}">{sched_text}</div><div class="label">定时任务</div></div>
+        <div class="card"><div class="num" style="font-size:1.5em;color:{api_color}">{api_text}</div><div class="label">API-Football</div></div>
+        <div class="card"><div class="num">{sched_status["hours_since_update"]}</div><div class="label">距上次更新(小时)</div></div>
+        <div class="card"><div class="num">{integ_status["teams_with_squads"]}</div><div class="label">已录入球员数据的球队</div></div>
+        <div class="card"><div class="num">{integ_status["total_players"]}</div><div class="label">追踪球员总数</div></div>
+    </div>
+
+    {report_links_html}
+
+    <section class="section">
+        <h2 class="section-title">录入小组赛结果 <span style="font-size:.5em;color:var(--dim);font-weight:400">({len([m for m in history if m.get('stage')=='group'])}/72 已录入)</span></h2>
+        <div style="max-width:800px;margin:0 auto">
+            {"<p style='color:var(--dim);padding:12px'>所有小组赛结果已录入</p>" if not pending_html else pending_html}
+        </div>
+    </section>
+
+    <section class="section">
+        <h2 class="section-title">球队实力（含球员调整）</h2>
+        <div style="font-size:.8em;color:var(--dim);margin-bottom:8px">基于 {integ_status["total_players"]} 名球员，覆盖 {integ_status["teams_with_squads"]} 支球队。包含联赛质量、近期状态、伤病情况。</div>
+        <div style="max-width:1100px;margin:0 auto;overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:.85em">
+                <thead><tr style="color:var(--accent2);font-size:.8em">
+                    <th style="padding:6px 8px;text-align:left">球队</th>
+                    <th style="padding:6px 8px;text-align:center">Elo</th>
+                    <th style="padding:6px 8px;text-align:center">联赛质量</th>
+                    <th style="padding:6px 8px;text-align:center">实力评分</th>
+                    <th style="padding:6px 8px;text-align:center">球员数</th>
+                    <th style="padding:6px 8px;text-align:center">伤病</th>
+                    <th style="padding:6px 8px;text-align:center">战绩</th>
+                </tr></thead>
+                <tbody>{player_team_rows}</tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2 class="section-title">评分最高的球员</h2>
+        <div style="max-width:500px;margin:0 auto">
+            {top_player_html}
+        </div>
+    </section>
+
+    <section class="section">
+        <h2 class="section-title">比赛历史（最近30场）</h2>
+        <div style="max-width:700px;margin:0 auto">
+            <table style="width:100%;border-collapse:collapse;font-size:.9em">
+                <thead><tr style="color:var(--accent2);font-size:.85em">
+                    <th style="padding:4px 8px;text-align:left">主队</th>
+                    <th style="padding:4px 8px;text-align:center">比分</th>
+                    <th style="padding:4px 8px;text-align:left">客队</th>
+                    <th style="padding:4px 8px;text-align:center">阶段</th>
+                </tr></thead>
+                <tbody>{hist_rows}</tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2 class="section-title">定时任务状态</h2>
+        <div style="max-width:600px;margin:0 auto">
+            <table style="width:100%;border-collapse:collapse;font-size:.9em">
+                <tbody>
+                    <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px;color:var(--dim)">状态</td><td style="padding:8px;font-weight:600;color:{sched_color}">{sched_text}</td></tr>
+                    <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px;color:var(--dim)">API Key</td><td style="padding:8px;color:{api_color}">{api_text}</td></tr>
+                    <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px;color:var(--dim)">周期数</td><td style="padding:8px">{sched_status["cycle_count"]}</td></tr>
+                    <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px;color:var(--dim)">上次刷新</td><td style="padding:8px">{sched_status["last_cycle_end"]}</td></tr>
+                    <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px;color:var(--dim)">下次计划</td><td style="padding:8px">{sched_status["next_scheduled"]}</td></tr>
+                    <tr style="border-bottom:1px solid var(--border)"><td style="padding:8px;color:var(--dim)">更新间隔</td><td style="padding:8px">{sched_status["update_interval_hours"]} 小时</td></tr>
+                    <tr><td style="padding:8px;color:var(--dim)">最后错误</td><td style="padding:8px;color:{'var(--danger)' if sched_status['last_error'] else 'var(--success)'}">{sched_status['last_error'] or '无'}</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+    # User management section
+    users = load_json(USERS_FILE)
+    now_ts = time.time()
+    user_rows = ""
+    for uname, udata in sorted(users.items()):
+        if uname == "admin": continue
+        is_p = udata.get("premium", False)
+        pt = udata.get("purchase_type", "")
+        pm = udata.get("purchased_matches", [])
+        pu = udata.get("premium_until", 0)
+        cd = time.strftime("%Y-%m-%d %H:%M", time.localtime(udata.get("created", 0)))
+        if is_p and pu > now_ts:
+            dl = int((pu - now_ts) / 86400)
+            if pt == "all":
+                st = "全车·剩余%d天" % dl
+            elif pt == "single" and pm:
+                ml = []
+                for mk in pm[:3]:
+                    p2 = mk.split("|")
+                    if len(p2) == 2: ml.append(tcn(p2[0])+" vs "+tcn(p2[1]))
+                md = ", ".join(ml)
+                if len(pm) > 3: md += " +%d场" % (len(pm)-3)
+                st = "单场(%s)·剩余%d天" % (md, dl)
+            else:
+                st = "已付费·剩余%d天" % dl
+            sc = "#10B981"
+        elif is_p and pu and pu <= now_ts:
+            st = "已过期"; sc = "#EF4444"
+        else:
+            st = "免费"; sc = "var(--dim)"
+        eu = html.escape(uname)
+        da = "disabled" if not is_p else ""
+        user_rows += ('<tr style="border-bottom:1px solid var(--border)">' +
+            '<td style="padding:8px;font-weight:600">' + eu + '</td>' +
+            '<td style="padding:8px;text-align:center;color:' + sc + ';font-weight:600;font-size:.85em">' + st + '</td>' +
+            '<td style="padding:8px;text-align:center;font-size:.8em;color:var(--dim)">' + cd + '</td>' +
+            '<td style="padding:8px;text-align:center;white-space:nowrap">' +
+            '<button onclick="openGrantModal(\x27' + eu + '\x27)" class="btn btn-sm btn-outline" style="font-size:.7em;padding:3px 8px;color:#C4A035;border-color:#C4A035">开通</button>' +
+            '<form method="post" action="/api/admin/revoke_premium" style="display:inline">' +
+            '<input type="hidden" name="username" value="' + eu + '">' +
+            '<button type="submit" class="btn btn-sm btn-outline" style="font-size:.7em;padding:3px 8px;color:var(--danger);border-color:var(--danger)" ' + da + '>取消</button></form></td></tr>')
+
+    uc = max(0, len(users) - 1)
+    em = '<tr><td colspan="4" style="padding:16px;text-align:center;color:var(--dim)">暂无注册用户</td></tr>'
+    user_section = """
+    <section class="section">
+        <h2 class="section-title">用户管理（共 """ + str(uc) + """ 人）</h2>
+        <div style="max-width:900px;margin:0 auto">
+            <table style="width:100%;border-collapse:collapse;font-size:.9em">
+                <thead><tr style="color:var(--accent2);font-size:.85em">
+                    <th style="padding:8px;text-align:left">用户名</th>
+                    <th style="padding:8px;text-align:center">权限状态</th>
+                    <th style="padding:8px;text-align:center">注册时间</th>
+                    <th style="padding:8px;text-align:center">操作</th>
+                </tr></thead>
+                <tbody>""" + (user_rows if user_rows else em) + """</tbody>
+            </table>
+        </div>
+    </section>
+    """
+    schedule = load_schedule()
+    mo = ""
+    for m in schedule:
+        hm, aw = m.get("home",""), m.get("away","")
+        mo += '<option value="' + hm + '|' + aw + '">' + tcn(hm) + ' vs ' + tcn(aw) + '</option>'
+    if not mo: mo = '<option value="">暂无赛程</option>'
+    modal = """
+    <div id="grantModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:500;align-items:center;justify-content:center">
+      <div style="background:var(--card);border-radius:16px;padding:24px;max-width:480px;width:90%;max-height:80vh;overflow-y:auto;position:relative">
+        <h3 style="margin-bottom:16px;font-size:1.1em;color:var(--accent)">开通付费权限</h3>
+        <form id="grantForm" method="post" action="/api/admin/grant_premium">
+          <input type="hidden" id="grantUsername" name="username" value="">
+          <div style="margin-bottom:12px"><label style="display:block;font-size:.85em;color:var(--dim);margin-bottom:4px">购买类型</label>
+          <select name="purchase_type" id="grantType" onchange="onGrantTypeChange()" style="width:100%;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.9em">
+            <option value="all">全车套餐（可访问所有比赛报告）</option><option value="single">单场比赛</option></select></div>
+          <div id="matchSelectDiv" style="margin-bottom:12px;display:none"><label style="display:block;font-size:.85em;color:var(--dim);margin-bottom:4px">选择比赛</label>
+          <select name="match_id" id="grantMatch" style="width:100%;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.9em">
+          """ + mo + """
+          </select></div>
+          <div style="margin-bottom:16px"><label style="display:block;font-size:.85em;color:var(--dim);margin-bottom:4px">有效期（天）</label>
+          <select name="duration_days" style="width:100%;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.9em">
+            <option value="3">3天</option><option value="7">7天</option><option value="14">14天</option>
+            <option value="30" selected>30天</option><option value="60">60天</option><option value="90">90天</option>
+            <option value="120">120天（覆盖整个世界杯）</option></select></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button type="button" onclick="closeGrantModal()" class="btn btn-outline btn-sm">取消</button>
+            <button type="submit" class="btn btn-sm" style="background:linear-gradient(135deg,#C4A035,#2D8A3E);color:#fff;border:none">确认开通</button>
+          </div></form>
+        <button onclick="closeGrantModal()" style="position:absolute;top:12px;right:16px;background:none;border:none;color:var(--dim);font-size:1.3em;cursor:pointer">&#x2715;</button>
+      </div></div>
+    <script>
+    function openGrantModal(u){document.getElementById("grantUsername").value=u;document.getElementById("grantModal").style.display="flex";}
+    function closeGrantModal(){document.getElementById("grantModal").style.display="none";}
+    function onGrantTypeChange(){var t=document.getElementById("grantType").value;document.getElementById("matchSelectDiv").style.display=t==="single"?"block":"none";}
+    </script>
+    """
+    content += user_section + modal + """
+    <section class="section">
+        <h2 class="section-title">系统维护</h2>
+        <div style="max-width:700px;margin:0 auto;text-align:center">
+            <form method="post" action="/api/admin/refresh" style="display:inline;margin:4px"><button type="submit" class="btn btn-outline btn-sm">立即刷新所有数据</button></form>
+            <form method="post" action="/api/admin/cleanup_expired" style="display:inline;margin:4px"><button type="submit" class="btn btn-outline btn-sm">清理过期用户</button></form>
+            <form method="post" action="/api/admin/backup_data" style="display:inline;margin:4px"><button type="submit" class="btn btn-outline btn-sm">备份数据</button></form>
+            <a href="/reset-data" class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);margin:4px;display:inline-block">重置所有数据</a>
+        </div>
+    </section>
+    """
+    return render_page("管理后台 - 波胆教父", content, "admin", True, "admin")
+
+
+
+def handle_report(token, home_name, away_name):
+    """Generate customer-facing prediction report (screenshot-friendly)."""
+    home = data_manager.get_dynamic_team(home_name, use_player_data=True)
+    away = data_manager.get_dynamic_team(away_name, use_player_data=True)
+    if not home or not away:
+        return "HTTP/1.0 404 Not Found\r\nContent-Type: text/html\r\n\r\n<h1>404 Not Found</h1>"
+
+    result = predictor.predict(home, away, MatchStage.GROUP)
+    gen = ReportGenerator()
+
+    # Determine user tier and benefits
+    premium, purchase_type, access_reason = check_premium(token, home_name, away_name)
+    stage_key, stage_label, _ = get_match_stage_and_price(home_name, away_name)
+
+    # Build benefits banner for premium users
+    benefits_banner = ""
+    if premium:
+        match_benefits = {
+            "group": ["完整量化分析", "比分热力图", "总进球概率", "波胆推荐", "盘口预警", "舆情分析", "赛后复盘", "赛前预警"],
+            "knockout": ["完整量化分析", "比分热力图", "总进球概率", "加时/点球", "波胆推荐", "盘口预警", "舆情分析", "赛后复盘", "赛前预警"],
+            "semi": ["完整量化分析", "比分热力图", "总进球概率", "加时/点球", "波胆推荐", "盘口预警", "舆情分析", "赛后复盘", "赛前预警", "1v1答疑"],
+            "final": ["完整量化分析", "比分热力图", "总进球概率", "加时/点球", "压力测试", "波胆推荐", "盘口预警", "舆情分析", "赛后复盘", "赛前预警"],
+        }
+        benefits = match_benefits.get(stage_key, match_benefits["group"])
+        benefit_tags = "".join([f'<span style="display:inline-block;background:rgba(196,160,53,.12);color:#C4A035;padding:3px 10px;border-radius:12px;font-size:.65em;margin:2px">{b}</span>' for b in benefits])
+        benefits_banner = f"""
+        <div style="text-align:center;padding:10px 8px;margin-bottom:12px;background:rgba(45,138,62,.08);border:1px solid rgba(45,138,62,.15);border-radius:10px">
+            <div style="font-size:.7em;color:#2D8A3E;margin-bottom:4px;font-weight:600">✓ 您已解锁本报告全部权益</div>
+            <div style="line-height:1.6">{benefit_tags}</div>
+        </div>
+        """
+    else:
+        lock_msg = "完整报告需付费解锁"
+        lock_detail = f'<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:6px"><a href="/payment?match={urllib.parse.quote(home_name)}&vs={urllib.parse.quote(away_name)}&stage={stage_key}" style="display:inline-block;background:linear-gradient(135deg,#C4A035,#2D8A3E);color:#fff;padding:5px 14px;border-radius:16px;font-size:.72em;text-decoration:none">购买单场报告</a><a href="/payment?plan=all" style="display:inline-block;background:var(--card);color:var(--text);border:1px solid var(--border);padding:5px 14px;border-radius:16px;font-size:.72em;text-decoration:none">全车套餐 ¥2999</a></div>'
+        if access_reason == "expired":
+            lock_msg = "您的权限已到期，请续费"
+            lock_detail = f'<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:6px"><a href="/payment?plan=all" style="display:inline-block;background:linear-gradient(135deg,#C4A035,#2D8A3E);color:#fff;padding:5px 14px;border-radius:16px;font-size:.72em;text-decoration:none">续费全车套餐</a></div>'
+        elif access_reason == "match_not_purchased":
+            lock_msg = "此比赛报告需单独购买"
+            lock_detail = f'<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:6px"><a href="/payment?match={urllib.parse.quote(home_name)}&vs={urllib.parse.quote(away_name)}&stage={stage_key}" style="display:inline-block;background:linear-gradient(135deg,#C4A035,#2D8A3E);color:#fff;padding:5px 14px;border-radius:16px;font-size:.72em;text-decoration:none">购买此场比赛</a><a href="/payment?plan=all" style="display:inline-block;background:var(--card);color:var(--text);border:1px solid var(--border);padding:5px 14px;border-radius:16px;font-size:.72em;text-decoration:none">升级全车</a></div>'
+        benefits_banner = f'''
+        <div style="text-align:center;padding:10px 8px;margin-bottom:12px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);border-radius:10px">
+            <div style="font-size:.75em;color:#EF4444;margin-bottom:4px">🔒 {lock_msg}</div>
+            {lock_detail}
+        </div>
+        '''
+
+    # Generate HTML report
+    html_report = gen.generate_html(result, home, away)
+
+    # Replace English team names with Chinese in the report HTML
+    home_cn = tcn(home_name)
+    away_cn = tcn(away_name)
+    html_report = html_report.replace(home_name, home_cn).replace(away_name, away_cn)
+
+    # Add responsive wrapper for screenshot
+    wrapper = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>预测报告 - {home_cn} vs {away_cn}</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#0B1A10;min-height:100vh}}
+.report-wrapper{{max-width:420px;margin:0 auto;padding:16px}}
+.screenshot-hint{{text-align:center;padding:8px;margin-bottom:12px;background:rgba(196,160,53,.1);border:1px solid rgba(196,160,53,.3);border-radius:8px;font-size:.75em;color:#C4A035}}
+.screenshot-hint button{{background:linear-gradient(135deg,#C4A035,#2D8A3E);border:none;color:#fff;padding:6px 16px;border-radius:16px;cursor:pointer;font-size:.9em;margin-left:8px}}
+.back-link{{display:block;text-align:center;padding:12px;font-size:.8em}}
+.back-link a{{color:#C4A035;text-decoration:none}}
+</style>
+<meta name="description" content="波胆教父 · 2026世界杯AI量化预测系统，基于泊松分布、蒙特卡洛模拟和贝叶斯修正，提供比分预测、夺冠概率和深度分析报告。">
+<meta name="keywords" content="世界杯预测,2026世界杯,比分预测,足球预测,波胆,AI预测,泊松分布">
+<meta property="og:title" content="波胆教父 · 2026世界杯AI量化预测系统">
+<meta property="og:description" content="基于金融工程技术的世界杯AI量化预测，提供104场比赛完整分析报告">
+<meta property="og:type" content="website">
+<link rel="canonical" href="https://worldcup-prediction-production-ec11.up.railway.app/">
+</head>
+<body>
+<div class="report-wrapper">
+<div class="screenshot-hint">
+    📱 截图发送给客户
+    <button onclick="window.print()">打印/保存为PDF</button>
+</div>
+{benefits_banner}
+{html_report}
+<div class="back-link"><a href="javascript:history.back()">← 返回</a></div>
+</div>
+</body>
+</html>"""
+    return wrapper
+
+
+def handle_multibet(token):
+    """Multi-bet combo predictions (score + 1X2). Only visible to full-package (¥2999) users."""
+    premium, _ptype, _reason = check_premium(token)
+    username = get_session_user(token) or ""
+
+    if not premium:
+        # Non-premium users see nothing - page not accessible
+        content = """
+        <div class="page-header"><h1>🔒 组合投注预测</h1><p>多串一服务仅限全车套餐用户</p></div>
+        <div class="card" style="text-align:center;padding:40px">
+            <div style="font-size:3em;margin-bottom:16px">👑</div>
+            <h2 style="margin-bottom:12px">全车套餐专属服务</h2>
+            <p style="color:var(--dim);margin-bottom:24px">比分多串一和胜平负多串一预测服务仅对购买¥2999世界杯全车套餐的用户开放。</p>
+            <a href="/payment?plan=all" class="btn btn-primary">购买全车套餐 ¥2999</a>
+        </div>
+        """
+        return render_page("组合投注 - 波胆教父", content, "", False)
+
+    # Premium users: show multi-bet predictions
+    predictions = get_all_predictions()
+    group_matches = [p for p in predictions if hasattr(p, 'group') and p.group and p.group != "KO"]
+
+    # Build score multi-bet (比分多串一): top 3 most confident exact score predictions
+    score_picks = []
+    for p in group_matches:
+        h, a = p.most_likely_score
+        score_picks.append({
+            "match": f"{tcn(p.home_team)} vs {tcn(p.away_team)}",
+            "pick": f"{h}:{a}",
+            "prob": p.score_prob(h, a) * 100,
+            "confidence": p.confidence * 100,
+        })
+    score_picks.sort(key=lambda x: x["prob"] * x["confidence"], reverse=True)
+    top_score_picks = score_picks[:5]
+
+    score_rows = ""
+    for i, pick in enumerate(top_score_picks, 1):
+        score_rows += f"""
+        <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:10px 8px">{i}</td>
+            <td style="padding:10px 8px;font-weight:600">{pick['match']}</td>
+            <td style="padding:10px 8px;text-align:center;color:var(--accent2);font-weight:700">{pick['pick']}</td>
+            <td style="padding:10px 8px;text-align:center">{pick['prob']:.1f}%</td>
+            <td style="padding:10px 8px;text-align:center">{pick['confidence']:.0f}%</td>
+        </tr>"""
+
+    # Build 1X2 multi-bet (胜平负多串一): top 5 most confident win/draw/loss predictions
+    result_picks = []
+    for p in group_matches:
+        probs = [
+            ("主胜", p.home_win_prob, p.home_team),
+            ("平", p.draw_prob, None),
+            ("客胜", p.away_win_prob, p.away_team),
+        ]
+        probs.sort(key=lambda x: x[1], reverse=True)
+        best_label, best_prob, best_team = probs[0]
+        result_picks.append({
+            "match": f"{tcn(p.home_team)} vs {tcn(p.away_team)}",
+            "pick": best_label,
+            "prob": best_prob * 100,
+            "confidence": p.confidence * 100,
+        })
+    result_picks.sort(key=lambda x: x["prob"] * x["confidence"], reverse=True)
+    top_result_picks = result_picks[:5]
+
+    result_rows = ""
+    for i, pick in enumerate(top_result_picks, 1):
+        result_rows += f"""
+        <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:10px 8px">{i}</td>
+            <td style="padding:10px 8px;font-weight:600">{pick['match']}</td>
+            <td style="padding:10px 8px;text-align:center;color:var(--accent2);font-weight:700">{pick['pick']}</td>
+            <td style="padding:10px 8px;text-align:center">{pick['prob']:.1f}%</td>
+            <td style="padding:10px 8px;text-align:center">{pick['confidence']:.0f}%</td>
+        </tr>"""
+
+    content = f"""
+    <div class="page-header"><h1>🎯 组合投注预测</h1><p>全车套餐专属 · AI精选多串一方案</p></div>
+
+    <!-- Score Multi-bet -->
+    <section class="section">
+        <div class="card" style="border-color:var(--accent2)">
+            <h2 style="font-size:1.1em;margin-bottom:8px;display:flex;align-items:center;gap:8px">
+                <span style="background:var(--grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent">比分多串一</span>
+                <span style="font-size:.65em;background:rgba(196,160,53,.12);color:#C4A035;padding:2px 8px;border-radius:8px">精选5场</span>
+            </h2>
+            <p style="color:var(--dim);font-size:.85em;margin-bottom:16px">基于泊松模型 + 蒙特卡洛模拟，精选置信度最高的5场比分预测</p>
+            <div style="overflow-x:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:.9em">
+                    <thead><tr style="color:var(--accent2);font-size:.8em;text-align:left">
+                        <th style="padding:8px">#</th>
+                        <th style="padding:8px">对阵</th>
+                        <th style="padding:8px;text-align:center">推荐比分</th>
+                        <th style="padding:8px;text-align:center">比分概率</th>
+                        <th style="padding:8px;text-align:center">模型置信度</th>
+                    </tr></thead>
+                    <tbody>{score_rows}</tbody>
+                </table>
+            </div>
+            <div style="margin-top:16px;padding:12px;background:rgba(239,68,68,.06);border-radius:8px;border:1px solid rgba(239,68,68,.15)">
+                <p style="font-size:.8em;color:#EF4444">⚠️ 风险提示：多串一预测仅供参考，足球比赛存在不可预测的随机性。请理性购彩，切勿过度投注。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 1X2 Multi-bet -->
+    <section class="section">
+        <div class="card" style="border-color:var(--accent)">
+            <h2 style="font-size:1.1em;margin-bottom:8px;display:flex;align-items:center;gap:8px">
+                <span style="background:var(--grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent">胜平负多串一</span>
+                <span style="font-size:.65em;background:rgba(45,138,62,.12);color:#2D8A3E;padding:2px 8px;border-radius:8px">精选5场</span>
+            </h2>
+            <p style="color:var(--dim);font-size:.85em;margin-bottom:16px">基于三层贝叶斯模型，精选胜率最高的5场胜平负预测</p>
+            <div style="overflow-x:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:.9em">
+                    <thead><tr style="color:var(--accent2);font-size:.8em;text-align:left">
+                        <th style="padding:8px">#</th>
+                        <th style="padding:8px">对阵</th>
+                        <th style="padding:8px;text-align:center">推荐结果</th>
+                        <th style="padding:8px;text-align:center">结果概率</th>
+                        <th style="padding:8px;text-align:center">模型置信度</th>
+                    </tr></thead>
+                    <tbody>{result_rows}</tbody>
+                </table>
+            </div>
+            <div style="margin-top:16px;padding:12px;background:rgba(239,68,68,.06);border-radius:8px;border:1px solid rgba(239,68,68,.15)">
+                <p style="font-size:.8em;color:#EF4444">⚠️ 风险提示：多串一预测仅供参考，足球比赛存在不可预测的随机性。请理性购彩，切勿过度投注。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Combo suggestion -->
+    <section class="section">
+        <div class="card" style="background:rgba(196,160,53,.04);border-color:rgba(196,160,53,.15)">
+            <h3 style="font-size:1em;margin-bottom:12px">💡 组合建议</h3>
+            <p style="color:var(--dim);font-size:.85em;line-height:1.8">
+                以上预测基于当前球队数据、近期状态和阵容情况生成。<br>
+                每场比赛开赛前24小时，模型会根据最新伤病报告、盘口变化和阵容调整进行最终修正。<br>
+                建议将多串一场次控制在3-5场，单场概率低于55%的推荐谨慎选择。
+            </p>
+        </div>
+    </section>
+    """
+    return render_page("组合投注 - 波胆教父", content, "", premium, username)
+
+
+# ============================================================================
+# HTTP Server
+# ============================================================================
+
+class RequestHandler(http.server.BaseHTTPRequestHandler):
+    """Simple HTTP request handler."""
+
+    def log_message(self, format, *args):
+        print(f"[{self.log_date_time_string()}] {args[0]} {args[1]} {args[2]}")
+
+    def get_token(self):
+        """Extract session token from cookies."""
+        cookie = self.headers.get("Cookie", "")
+        for part in cookie.split(";"):
+            part = part.strip()
+            if part.startswith("session="):
+                return part[8:]
+        return None
+
+    def send_html(self, html, status=200):
+        """Send HTML response."""
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", len(html.encode()))
+        self.end_headers()
+        self.wfile.write(html.encode())
+
+    def send_redirect(self, location, cookie_token=None):
+        """Send redirect response, optionally with a session cookie."""
+        self.send_response(302)
+        self.send_header("Location", location)
+        if cookie_token:
+            self.send_header("Set-Cookie", f"session={cookie_token}; Path=/; Max-Age=2592000")
+        self.end_headers()
+
+    def do_GET(self):
+        token = self.get_token()
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        # Static files
+        if path == "/static/style.css":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"/* embedded */")
+            return
+        elif path.startswith("/static/assets/"):
+            # Serve payment QR code images
+            asset_path = os.path.join(os.path.dirname(__file__), path[1:])
+            if os.path.exists(asset_path):
+                ext = os.path.splitext(asset_path)[1].lower()
+                content_type = "image/png" if ext == ".png" else "image/jpeg" if ext in (".jpg", ".jpeg") else "application/octet-stream"
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.end_headers()
+                with open(asset_path, "rb") as f:
+                    self.wfile.write(f.read())
+            else:
+                self.send_response(404)
+                self.end_headers()
+            return
+
+        # Routes
+        if path == "/" or path == "/home":
+            html = handle_home(token)
+            self.send_html(html)
+        elif path == "/matches":
+            html = handle_matches(token)
+            self.send_html(html)
+        elif path.startswith("/match/"):
+            parts = path.split("/")
+            if len(parts) >= 4:
+                home_name = urllib.parse.unquote(parts[2])
+                away_name = urllib.parse.unquote(parts[3])
+                html = handle_match_detail(token, home_name, away_name)
+                self.send_html(html)
+            else:
+                self.send_redirect("/matches")
+        elif path.startswith("/report/"):
+            parts = path.split("/")
+            if len(parts) >= 4:
+                home_name = urllib.parse.unquote(parts[2])
+                away_name = urllib.parse.unquote(parts[3])
+                html = handle_report(token, home_name, away_name)
+                self.send_html(html)
+            else:
+                self.send_redirect("/")
+        elif path == "/warmup":
+            html = handle_warmup(token)
+            self.send_html(html)
+        elif path == "/pricing":
+            html = handle_pricing(token)
+            self.send_html(html)
+        elif path == "/payment":
+            query = urllib.parse.parse_qs(parsed.query)
+            plan = query.get("plan", ["all"])[0]
+            match_home = query.get("match", [None])[0]
+            match_away = query.get("vs", [None])[0]
+            match_stage = query.get("stage", [None])[0]
+            html = handle_payment(token, plan, match_home, match_away, match_stage)
+            self.send_html(html)
+        elif path == "/model":
+            html = handle_model(token)
+            self.send_html(html)
+        elif path == "/login":
+            html = handle_login(token)
+            self.send_html(html)
+        elif path == "/logout":
+            self.send_redirect("/")
+        elif path == "/admin":
+            html = handle_admin(token)
+            self.send_html(html)
+        elif path == "/multibet":
+            html = handle_multibet(token)
+            self.send_html(html)
+        elif path == "/select-match":
+            html = handle_select_match(token)
+            self.send_html(html)
+        elif path == "/reset-data":
+            # Reset all data (admin only)
+            username = get_session_user(token)
+            if username == "admin":
+                from src.data_manager import reset_data_manager
+                data_dir = os.path.join(os.path.dirname(__file__), 'data')
+                for f in ['match_history.json', 'team_state.json']:
+                    fp = os.path.join(data_dir, f)
+                    if os.path.exists(fp):
+                        os.remove(fp)
+                reset_data_manager()
+                import sys
+                sys.modules[__name__].data_manager = get_data_manager(data_dir)
+            self.send_redirect("/admin")
+        elif path == "/sitemap.xml":
+            sitemap = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://worldcup-prediction-production-ec11.up.railway.app/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>
+  <url><loc>https://worldcup-prediction-production-ec11.up.railway.app/matches</loc><changefreq>daily</changefreq><priority>0.9</priority></url>
+  <url><loc>https://worldcup-prediction-production-ec11.up.railway.app/model</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://worldcup-prediction-production-ec11.up.railway.app/warmup</loc><changefreq>daily</changefreq><priority>0.8</priority></url>
+  <url><loc>https://worldcup-prediction-production-ec11.up.railway.app/pricing</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://worldcup-prediction-production-ec11.up.railway.app/payment</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://worldcup-prediction-production-ec11.up.railway.app/login</loc><changefreq>monthly</changefreq><priority>0.5</priority></url>
+</urlset>"""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/xml; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(sitemap.encode())
+        elif path == "/robots.txt":
+            robots = """User-agent: *
+Allow: /
+Sitemap: https://worldcup-prediction-production-ec11.up.railway.app/sitemap.xml
+"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(robots.encode())
+        elif path == "/favicon.ico":
+            self.send_response(404)
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write("<h1>404 页面未找到</h1><p>您访问的页面不存在。</p>".encode())
+
+    def do_POST(self):
+        """
+        Handle POST requests for user registration, login, and admin actions.
+
+        =========================================================================
+        USER DATA STORAGE SCHEMA (users.json)
+        =========================================================================
+        File: web_app/data/users.json
+        Format: JSON object, keys are usernames, values are user records
+
+        User Record Structure:
+        {
+            "username": "string",           // Username (dict key)
+            "password": "string (hex)",     // SHA-256 hash truncated to 16 chars
+            "premium": "boolean",           // Whether user has paid access
+            "premium_until": "int (timestamp)", // Unix timestamp of premium expiry
+            "created": "int (timestamp)"    // Unix timestamp of registration
+        }
+
+        Example:
+        {
+            "testuser": {
+                "password": "a3f5c8b2d1e4f7a9",
+                "premium": true,
+                "premium_until": 1754064000,
+                "created": 1751472000
+            }
+        }
+
+        =========================================================================
+        SESSION TOKEN STORAGE SCHEMA (tokens.json)
+        =========================================================================
+        File: web_app/data/tokens.json
+        Format: JSON object, keys are session tokens, values are usernames
+
+        Token Structure:
+        {
+            "token_hex_32chars": "username"
+        }
+
+        Session tokens are SHA-256 hashes of "username:timestamp:uuid",
+        truncated to 32 characters. They are stored as HTTP cookies with
+        Max-Age of 30 days (2592000 seconds).
+        =========================================================================
+        """
+        token = self.get_token()
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        if path == "/login":
+            # Read form data
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode()
+            params = urllib.parse.parse_qs(body)
+            username = params.get("username", [""])[0].strip()
+            password = params.get("password", [""])[0].strip()
+            action = params.get("action", ["login"])[0]
+
+            users = load_json(USERS_FILE)
+            tokens = load_json(TOKENS_FILE)
+
+            if action == "register":
+                # 验证用户名
+                valid_u, err_u = validate_username(username)
+                if not valid_u:
+                    html = handle_login(token, error_msg=err_u)
+                    self.send_html(html)
+                    return
+                # 验证密码
+                valid_p, err_p = validate_password(password)
+                if not valid_p:
+                    html = handle_login(token, error_msg=err_p)
+                    self.send_html(html)
+                    return
+                if username in users:
+                    html = handle_login(token, error_msg="用户名已存在，请选择其他用户名")
+                    self.send_html(html)
+                    return
+                pw_hash = hashlib.sha256(password.encode()).hexdigest()[:16]
+                users[username] = {"password": pw_hash, "premium": False, "premium_until": 0, "created": time.time()}
+                save_json(USERS_FILE, users)
+                new_token = hashlib.sha256(f"{username}:{time.time()}:{uuid.uuid4()}".encode()).hexdigest()[:32]
+                tokens[new_token] = username
+                save_json(TOKENS_FILE, tokens)
+                self.send_redirect("/", cookie_token=new_token)
+                return
+
+            else:  # login
+                # 验证用户名格式
+                valid_u, err_u = validate_username(username)
+                if not valid_u:
+                    html = handle_login(token, error_msg=err_u)
+                    self.send_html(html)
+                    return
+                valid_p, err_p = validate_password(password)
+                if not valid_p:
+                    html = handle_login(token, error_msg=err_p)
+                    self.send_html(html)
+                    return
+                pw_hash = hashlib.sha256(password.encode()).hexdigest()[:16]
+                user = users.get(username)
+                if user and user["password"] == pw_hash:
+                    new_token = hashlib.sha256(f"{username}:{time.time()}:{uuid.uuid4()}".encode()).hexdigest()[:32]
+                    tokens[new_token] = username
+                    save_json(TOKENS_FILE, tokens)
+                    self.send_redirect("/", cookie_token=new_token)
+                    return
+                else:
+                    html = handle_login(token, error_msg="用户名或密码错误")
+                    self.send_html(html)
+                    return
+
+        elif path == "/api/admin/result":
+            username = get_session_user(token)
+            if username != "admin":
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"Forbidden")
+                return
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode()
+            params = urllib.parse.parse_qs(body)
+            home_team = params.get("home", [""])[0].strip()
+            away_team = params.get("away", [""])[0].strip()
+            home_goals = int(params.get("home_goals", ["0"])[0])
+            away_goals = int(params.get("away_goals", ["0"])[0])
+            stage = params.get("stage", ["group"])[0]
+            try:
+                data_manager.match_history = [
+                    m for m in data_manager.match_history
+                    if not (m.get('home') == home_team and m.get('away') == away_team and m.get('stage') == stage)
+                ]
+                data_manager._rebuild_form_history()
+                data_manager.add_match_result(home_team, away_team, home_goals, away_goals, stage)
+                print(f"  Admin: Result entered {home_team} {home_goals}-{away_goals} {away_team}")
+            except Exception as e:
+                print(f"  Admin error: {e}")
+            self.send_redirect("/admin")
+        elif path == "/api/admin/refresh":
+            username = get_session_user(token)
+            if username != "admin":
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"Forbidden")
+                return
+            print("  Admin: Forcing data refresh...")
+            from src.scheduler import get_scheduler
+            get_scheduler().request_refresh()
+            from src.team_integrator import get_team_integrator
+            get_team_integrator(data_manager).refresh_all()
+            print("  Admin: Data refresh triggered")
+            self.send_redirect("/admin")
+        elif path == "/api/admin/grant_premium":
+            username = get_session_user(token)
+            if username != "admin":
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"Forbidden")
+                return
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode()
+            params = urllib.parse.parse_qs(body)
+            target_user = params.get("username", [""])[0].strip()
+            purchase_type = params.get("purchase_type", ["all"])[0].strip()
+            match_id = params.get("match_id", [""])[0].strip()
+            duration_days = int(params.get("duration_days", ["30"])[0])
+
+            users = load_json(USERS_FILE)
+            if target_user in users and target_user != "admin":
+                user = users[target_user]
+                user["premium"] = True
+                user["purchase_type"] = purchase_type
+                user["premium_until"] = time.time() + 86400 * duration_days
+
+                if purchase_type == "single" and match_id:
+                    # Normalize match key
+                    parts = match_id.split("|")
+                    if len(parts) == 2:
+                        normalized = "|".join(sorted(parts))
+                        existing = user.get("purchased_matches", [])
+                        if normalized not in existing:
+                            existing.append(normalized)
+                        user["purchased_matches"] = existing
+                    else:
+                        user["purchase_type"] = "all"  # Fallback if match_id invalid
+                elif purchase_type == "all":
+                    user["purchased_matches"] = []
+
+                save_json(USERS_FILE, users)
+                type_label = "全车套餐" if purchase_type == "all" else f"单场({match_id.replace('|', ' vs ')})"
+                print(f"  Admin: 开通 {target_user} {type_label} {duration_days}天")
+            self.send_redirect("/admin")
+        elif path == "/api/admin/revoke_premium":
+            username = get_session_user(token)
+            if username != "admin":
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"Forbidden")
+                return
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode()
+            params = urllib.parse.parse_qs(body)
+            target_user = params.get("username", [""])[0].strip()
+
+            users = load_json(USERS_FILE)
+            if target_user in users and target_user != "admin":
+                user = users[target_user]
+                user["premium"] = False
+                user["purchase_type"] = ""
+                user["purchased_matches"] = []
+                user["premium_until"] = 0
+                save_json(USERS_FILE, users)
+                print(f"  Admin: 取消 {target_user} 的付费权限")
+            self.send_redirect("/admin")
+        elif path == "/api/admin/cleanup_expired":
+            username = get_session_user(token)
+            if username != "admin":
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"Forbidden")
+                return
+            cleanup_expired_users()
+            print("  Admin: 手动清理过期用户完成")
+            self.send_redirect("/admin")
+        elif path == "/api/admin/backup_data":
+            username = get_session_user(token)
+            if username != "admin":
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"Forbidden")
+                return
+            backup_json(USERS_FILE)
+            backup_json(TOKENS_FILE)
+            print("  Admin: 手动备份完成")
+            self.send_redirect("/admin")
+
+
+
+
+def main():
+    global USERS_FILE, TOKENS_FILE
+
+    # Initialize
+    users = load_json(USERS_FILE)
+    if "admin" not in users:
+        users["admin"] = {"password": hashlib.sha256(b"admin123").hexdigest()[:16],
+                         "premium": True, "purchase_type": "all", "purchased_matches": [],
+                         "premium_until": time.time() + 86400 * 365, "created": time.time()}
+        save_json(USERS_FILE, users)
+        print("  Admin account: admin / admin123")
+
+    server = socketserver.TCPServer((HOST, PORT), RequestHandler)
+    print(f"{'='*60}\n")
+    # Start background tasks
+    import threading
+    def _bg_tasks():
+        cleanup_cycle = 0
+        while True:
+            time.sleep(3600)
+            cleanup_cycle += 1
+            try:
+                cleanup_expired_users()
+                if cleanup_cycle % 6 == 0:
+                    data_backup_task()
+            except Exception as e:
+                print(f"  BG Error: {e}")
+    threading.Thread(target=_bg_tasks, daemon=True).start()
+    print("  Background tasks: cleanup (1h) + backup (6h)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

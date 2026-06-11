@@ -1,0 +1,4 @@
+# 2026 World Cup Prediction Web App
+# This app uses ZERO external dependencies - only Python 3.8+ standard library
+# No need to pip install anything. Just run:
+#   python server.py

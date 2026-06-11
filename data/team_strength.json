@@ -1,0 +1,335 @@
+{
+  "Brazil": {
+    "team": "Brazil",
+    "attack": 1.0334,
+    "defense": 1.0615,
+    "midfield": 1.0334,
+    "overall": 1.0418,
+    "bench_depth": 100.0,
+    "league_quality_factor": 0.924,
+    "key_players": [
+      {
+        "name": "Alisson Becker",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Ederson",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Marquinhos",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Eder Militao",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Gabriel Magalhaes",
+        "position": "Defender",
+        "overall": 54.8
+      }
+    ],
+    "injured_count": 0
+  },
+  "Argentina": {
+    "team": "Argentina",
+    "attack": 1.0345,
+    "defense": 1.0627,
+    "midfield": 1.0345,
+    "overall": 1.043,
+    "bench_depth": 100.0,
+    "league_quality_factor": 0.927,
+    "key_players": [
+      {
+        "name": "Emiliano Martinez",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Franco Armani",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Cristian Romero",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Nicolas Otamendi",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Lisandro Martinez",
+        "position": "Defender",
+        "overall": 54.8
+      }
+    ],
+    "injured_count": 0
+  },
+  "France": {
+    "team": "France",
+    "attack": 1.0296,
+    "defense": 1.0577,
+    "midfield": 1.0296,
+    "overall": 1.038,
+    "bench_depth": 100.0,
+    "league_quality_factor": 0.912,
+    "key_players": [
+      {
+        "name": "Hugo Lloris",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Mike Maignan",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Alphonse Areola",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Dayot Upamecano",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Ibrahima Konate",
+        "position": "Defender",
+        "overall": 54.8
+      }
+    ],
+    "injured_count": 0
+  },
+  "England": {
+    "team": "England",
+    "attack": 1.0547,
+    "defense": 1.0834,
+    "midfield": 1.0547,
+    "overall": 1.0633,
+    "bench_depth": 100.0,
+    "league_quality_factor": 0.991,
+    "key_players": [
+      {
+        "name": "Jordan Pickford",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Aaron Ramsdale",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "John Stones",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Harry Maguire",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Kyle Walker",
+        "position": "Defender",
+        "overall": 54.8
+      }
+    ],
+    "injured_count": 0
+  },
+  "Germany": {
+    "team": "Germany",
+    "attack": 1.0432,
+    "defense": 1.0716,
+    "midfield": 1.0432,
+    "overall": 1.0517,
+    "bench_depth": 100.0,
+    "league_quality_factor": 0.955,
+    "key_players": [
+      {
+        "name": "Manuel Neuer",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Marc-Andre ter Stegen",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Antonio Rudiger",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Joshua Kimmich",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "David Raum",
+        "position": "Defender",
+        "overall": 54.8
+      }
+    ],
+    "injured_count": 0
+  },
+  "Spain": {
+    "team": "Spain",
+    "attack": 1.0311,
+    "defense": 1.0591,
+    "midfield": 1.0311,
+    "overall": 1.0395,
+    "bench_depth": 100.0,
+    "league_quality_factor": 0.916,
+    "key_players": [
+      {
+        "name": "Unai Simon",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "David Raya",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Alex Remiro",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Dani Carvajal",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Aymeric Laporte",
+        "position": "Defender",
+        "overall": 54.8
+      }
+    ],
+    "injured_count": 0
+  },
+  "Portugal": {
+    "team": "Portugal",
+    "attack": 1.0213,
+    "defense": 1.0491,
+    "midfield": 1.0213,
+    "overall": 1.0296,
+    "bench_depth": 100.0,
+    "league_quality_factor": 0.885,
+    "key_players": [
+      {
+        "name": "Diogo Costa",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Jose Sa",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Ruben Dias",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Pepe",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Joao Cancelo",
+        "position": "Defender",
+        "overall": 54.8
+      }
+    ],
+    "injured_count": 0
+  },
+  "Netherlands": {
+    "team": "Netherlands",
+    "attack": 1.0319,
+    "defense": 1.06,
+    "midfield": 1.0319,
+    "overall": 1.0404,
+    "bench_depth": 100.0,
+    "league_quality_factor": 0.919,
+    "key_players": [
+      {
+        "name": "Justin Bijlow",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Mark Flekken",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Virgil van Dijk",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Matthijs de Ligt",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Nathan Ake",
+        "position": "Defender",
+        "overall": 54.8
+      }
+    ],
+    "injured_count": 0
+  },
+  "Japan": {
+    "team": "Japan",
+    "attack": 1.025,
+    "defense": 1.0529,
+    "midfield": 1.025,
+    "overall": 1.0334,
+    "bench_depth": 100.0,
+    "league_quality_factor": 0.897,
+    "key_players": [
+      {
+        "name": "Shuichi Gonda",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Kosei Tani",
+        "position": "Goalkeeper",
+        "overall": 54.8
+      },
+      {
+        "name": "Takehiro Tomiyasu",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Ko Itakura",
+        "position": "Defender",
+        "overall": 54.8
+      },
+      {
+        "name": "Hiroki Ito",
+        "position": "Defender",
+        "overall": 54.8
+      }
+    ],
+    "injured_count": 0
+  }
+}

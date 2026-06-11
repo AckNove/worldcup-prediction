@@ -1,0 +1,61 @@
+{
+  "AckNoveArthur": {
+    "password": "92a907d9d9dc083c616b122f138904684569613f8c3485bac3a7d5486f9dbff9",
+    "salt": "6000636fce744f0a",
+    "premium": true,
+    "purchase_type": "all",
+    "purchased_matches": [],
+    "premium_until": 1812707851.3481224,
+    "created": 1781171851.3481224
+  },
+  "admin": {
+    "password": "bbb635761007c1546b52be00ccc602ab4c278293d9dbca2fe0af634fae976199",
+    "premium": true,
+    "purchase_type": "all",
+    "purchased_matches": [],
+    "premium_until": 1812708481.0150943,
+    "created": 1781172481.0150943
+  },
+  "testuser2026": {
+    "password": "5be237930a01bfdf41ec93827093c2e3b21e197aa68cae9bbf3a49da33e6678e",
+    "salt": "0f0254c76d9443fd",
+    "premium": false,
+    "premium_until": 0,
+    "created": 1781178932.4234269
+  },
+  "testuser_new": {
+    "password": "a4c4894856aa1bbfb403d8a92d6f7fd65d42fad14be0e7f9fddf32016b7785d3",
+    "salt": "07703f357c554dc9",
+    "premium": false,
+    "premium_until": 0,
+    "created": 1781182285.3006625
+  },
+  "test001": {
+    "password": "124039abb448ac008924d77f98fe216978d05cbe23be78821ddec9d162405c81",
+    "salt": "861c5b35cc524f87",
+    "premium": false,
+    "premium_until": 0,
+    "created": 1781182603.8536088
+  },
+  "test_user_001": {
+    "password": "76c0ea18887d55c2c3548bca5bc969839397e003b4bf6dc828c46eb1446b2e02",
+    "salt": "d720f981f089402d",
+    "premium": false,
+    "premium_until": 0,
+    "created": 1781184088.724994
+  },
+  "testuser2026_new": {
+    "password": "ea442cd25b2606ff5c3fc6e3b0066769d9cf6e66f75721c4cdf4a89578cc05f2",
+    "salt": "572d0d325e604b1a",
+    "premium": false,
+    "premium_until": 0,
+    "created": 1781185098.816817
+  },
+  "deployment_test_001": {
+    "password": "90fa9821dc0bea9eeefe53d88f6292debb6db87c051b0eedf4581277562c3882",
+    "salt": "576a6ed941f748b9",
+    "premium": false,
+    "premium_until": 0,
+    "created": 1781186500.2971447
+  }
+}
