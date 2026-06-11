@@ -1,0 +1,1876 @@
+{
+  "version": "1.0",
+  "generated": "2026-05-16",
+  "source": "Initial template — populate via API when key is set",
+  "squads": {
+    "Brazil": [
+      {
+        "player_id": 1,
+        "name": "Alisson Becker",
+        "position": "Goalkeeper",
+        "club_name": "Liverpool",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 2,
+        "name": "Ederson",
+        "position": "Goalkeeper",
+        "club_name": "Manchester City",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 3,
+        "name": "Marquinhos",
+        "position": "Defender",
+        "club_name": "Paris Saint Germain",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 4,
+        "name": "Eder Militao",
+        "position": "Defender",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 5,
+        "name": "Gabriel Magalhaes",
+        "position": "Defender",
+        "club_name": "Arsenal",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 6,
+        "name": "Danilo",
+        "position": "Defender",
+        "club_name": "Juventus",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 7,
+        "name": "Alex Sandro",
+        "position": "Defender",
+        "club_name": "Flamengo",
+        "league_name": "Brazilian Serie A",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 8,
+        "name": "Casemiro",
+        "position": "Midfielder",
+        "club_name": "Manchester United",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 9,
+        "name": "Bruno Guimaraes",
+        "position": "Midfielder",
+        "club_name": "Newcastle",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 10,
+        "name": "Lucas Paqueta",
+        "position": "Midfielder",
+        "club_name": "West Ham",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 11,
+        "name": "Joelinton",
+        "position": "Midfielder",
+        "club_name": "Newcastle",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 12,
+        "name": "Andre",
+        "position": "Midfielder",
+        "club_name": "Fluminense",
+        "league_name": "Brazilian Serie A",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 13,
+        "name": "Neymar",
+        "position": "Forward",
+        "club_name": "Al Hilal",
+        "league_name": "Saudi Pro League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 14,
+        "name": "Vinicius Junior",
+        "position": "Forward",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 15,
+        "name": "Rodrygo",
+        "position": "Forward",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 16,
+        "name": "Raphinha",
+        "position": "Forward",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 17,
+        "name": "Gabriel Jesus",
+        "position": "Forward",
+        "club_name": "Arsenal",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 18,
+        "name": "Richarlison",
+        "position": "Forward",
+        "club_name": "Tottenham",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 19,
+        "name": "Gabriel Martinelli",
+        "position": "Forward",
+        "club_name": "Arsenal",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 20,
+        "name": "Endrick",
+        "position": "Forward",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 21,
+        "name": "Bremer",
+        "position": "Defender",
+        "club_name": "Juventus",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      },
+      {
+        "player_id": 22,
+        "name": "Douglas Luiz",
+        "position": "Midfielder",
+        "club_name": "Aston Villa",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Brazil",
+        "caps": 30
+      }
+    ],
+    "Argentina": [
+      {
+        "player_id": 1,
+        "name": "Emiliano Martinez",
+        "position": "Goalkeeper",
+        "club_name": "Aston Villa",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 2,
+        "name": "Franco Armani",
+        "position": "Goalkeeper",
+        "club_name": "River Plate",
+        "league_name": "Argentine Primera",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 3,
+        "name": "Cristian Romero",
+        "position": "Defender",
+        "club_name": "Tottenham",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 4,
+        "name": "Nicolas Otamendi",
+        "position": "Defender",
+        "club_name": "Benfica",
+        "league_name": "Primeira Liga",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 5,
+        "name": "Lisandro Martinez",
+        "position": "Defender",
+        "club_name": "Manchester United",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 6,
+        "name": "Nahuel Molina",
+        "position": "Defender",
+        "club_name": "Atletico Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 7,
+        "name": "Marcos Acuna",
+        "position": "Defender",
+        "club_name": "Sevilla",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 8,
+        "name": "Gonzalo Montiel",
+        "position": "Defender",
+        "club_name": "Nottingham Forest",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 9,
+        "name": "Nicolas Tagliafico",
+        "position": "Defender",
+        "club_name": "Lyon",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 10,
+        "name": "Leandro Paredes",
+        "position": "Midfielder",
+        "club_name": "Roma",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 11,
+        "name": "Rodrigo De Paul",
+        "position": "Midfielder",
+        "club_name": "Atletico Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 12,
+        "name": "Enzo Fernandez",
+        "position": "Midfielder",
+        "club_name": "Chelsea",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 13,
+        "name": "Alexis Mac Allister",
+        "position": "Midfielder",
+        "club_name": "Liverpool",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 14,
+        "name": "Giovani Lo Celso",
+        "position": "Midfielder",
+        "club_name": "Tottenham",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 15,
+        "name": "Exequiel Palacios",
+        "position": "Midfielder",
+        "club_name": "Bayer Leverkusen",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 16,
+        "name": "Lionel Messi",
+        "position": "Forward",
+        "club_name": "Inter Miami",
+        "league_name": "MLS",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 17,
+        "name": "Julian Alvarez",
+        "position": "Forward",
+        "club_name": "Manchester City",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 18,
+        "name": "Lautaro Martinez",
+        "position": "Forward",
+        "club_name": "Inter Milan",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 19,
+        "name": "Angel Di Maria",
+        "position": "Forward",
+        "club_name": "Benfica",
+        "league_name": "Primeira Liga",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 20,
+        "name": "Paulo Dybala",
+        "position": "Forward",
+        "club_name": "Roma",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      },
+      {
+        "player_id": 21,
+        "name": "Nicolas Gonzalez",
+        "position": "Forward",
+        "club_name": "Fiorentina",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "Argentina",
+        "caps": 30
+      }
+    ],
+    "France": [
+      {
+        "player_id": 1,
+        "name": "Hugo Lloris",
+        "position": "Goalkeeper",
+        "club_name": "Los Angeles FC",
+        "league_name": "MLS",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 2,
+        "name": "Mike Maignan",
+        "position": "Goalkeeper",
+        "club_name": "AC Milan",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 3,
+        "name": "Alphonse Areola",
+        "position": "Goalkeeper",
+        "club_name": "West Ham",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 4,
+        "name": "Dayot Upamecano",
+        "position": "Defender",
+        "club_name": "Bayern Munich",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 5,
+        "name": "Ibrahima Konate",
+        "position": "Defender",
+        "club_name": "Liverpool",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 6,
+        "name": "William Saliba",
+        "position": "Defender",
+        "club_name": "Arsenal",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 7,
+        "name": "Lucas Hernandez",
+        "position": "Defender",
+        "club_name": "Paris Saint Germain",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 8,
+        "name": "Theo Hernandez",
+        "position": "Defender",
+        "club_name": "AC Milan",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 9,
+        "name": "Jules Kounde",
+        "position": "Defender",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 10,
+        "name": "Benjamin Pavard",
+        "position": "Defender",
+        "club_name": "Inter Milan",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 11,
+        "name": "Aurelien Tchouameni",
+        "position": "Midfielder",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 12,
+        "name": "Eduardo Camavinga",
+        "position": "Midfielder",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 13,
+        "name": "Adrien Rabiot",
+        "position": "Midfielder",
+        "club_name": "Juventus",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 14,
+        "name": "Youssouf Fofana",
+        "position": "Midfielder",
+        "club_name": "AC Milan",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 15,
+        "name": "Warren Zaire-Emery",
+        "position": "Midfielder",
+        "club_name": "Paris Saint Germain",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 16,
+        "name": "Kylian Mbappe",
+        "position": "Forward",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 17,
+        "name": "Antoine Griezmann",
+        "position": "Forward",
+        "club_name": "Atletico Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 18,
+        "name": "Olivier Giroud",
+        "position": "Forward",
+        "club_name": "AC Milan",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 19,
+        "name": "Ousmane Dembele",
+        "position": "Forward",
+        "club_name": "Paris Saint Germain",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 20,
+        "name": "Marcus Thuram",
+        "position": "Forward",
+        "club_name": "Inter Milan",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 21,
+        "name": "Randal Kolo Muani",
+        "position": "Forward",
+        "club_name": "Paris Saint Germain",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      },
+      {
+        "player_id": 22,
+        "name": "Kingsley Coman",
+        "position": "Forward",
+        "club_name": "Bayern Munich",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "France",
+        "caps": 30
+      }
+    ],
+    "England": [
+      {
+        "player_id": 1,
+        "name": "Jordan Pickford",
+        "position": "Goalkeeper",
+        "club_name": "Everton",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 2,
+        "name": "Aaron Ramsdale",
+        "position": "Goalkeeper",
+        "club_name": "Arsenal",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 3,
+        "name": "John Stones",
+        "position": "Defender",
+        "club_name": "Manchester City",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 4,
+        "name": "Harry Maguire",
+        "position": "Defender",
+        "club_name": "Manchester United",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 5,
+        "name": "Kyle Walker",
+        "position": "Defender",
+        "club_name": "Manchester City",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 6,
+        "name": "Luke Shaw",
+        "position": "Defender",
+        "club_name": "Manchester United",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 7,
+        "name": "Reece James",
+        "position": "Defender",
+        "club_name": "Chelsea",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 8,
+        "name": "Ben Chilwell",
+        "position": "Defender",
+        "club_name": "Chelsea",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 9,
+        "name": "Declan Rice",
+        "position": "Midfielder",
+        "club_name": "Arsenal",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 10,
+        "name": "Jude Bellingham",
+        "position": "Midfielder",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 11,
+        "name": "Phil Foden",
+        "position": "Midfielder",
+        "club_name": "Manchester City",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 12,
+        "name": "Bukayo Saka",
+        "position": "Midfielder",
+        "club_name": "Arsenal",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 13,
+        "name": "Cole Palmer",
+        "position": "Midfielder",
+        "club_name": "Chelsea",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 14,
+        "name": "Mason Mount",
+        "position": "Midfielder",
+        "club_name": "Manchester United",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 15,
+        "name": "Harry Kane",
+        "position": "Forward",
+        "club_name": "Bayern Munich",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 16,
+        "name": "Marcus Rashford",
+        "position": "Forward",
+        "club_name": "Manchester United",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 17,
+        "name": "Jack Grealish",
+        "position": "Forward",
+        "club_name": "Manchester City",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 18,
+        "name": "Ivan Toney",
+        "position": "Forward",
+        "club_name": "Brentford",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 19,
+        "name": "Ollie Watkins",
+        "position": "Forward",
+        "club_name": "Aston Villa",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      },
+      {
+        "player_id": 20,
+        "name": "Jarrod Bowen",
+        "position": "Forward",
+        "club_name": "West Ham",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "England",
+        "caps": 30
+      }
+    ],
+    "Germany": [
+      {
+        "player_id": 1,
+        "name": "Manuel Neuer",
+        "position": "Goalkeeper",
+        "club_name": "Bayern Munich",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 2,
+        "name": "Marc-Andre ter Stegen",
+        "position": "Goalkeeper",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 3,
+        "name": "Antonio Rudiger",
+        "position": "Defender",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 4,
+        "name": "Joshua Kimmich",
+        "position": "Defender",
+        "club_name": "Bayern Munich",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 5,
+        "name": "David Raum",
+        "position": "Defender",
+        "club_name": "RB Leipzig",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 6,
+        "name": "Jonathan Tah",
+        "position": "Defender",
+        "club_name": "Bayer Leverkusen",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 7,
+        "name": "Nico Schlotterbeck",
+        "position": "Defender",
+        "club_name": "Borussia Dortmund",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 8,
+        "name": "Benjamin Henrichs",
+        "position": "Defender",
+        "club_name": "RB Leipzig",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 9,
+        "name": "Ilkay Gundogan",
+        "position": "Midfielder",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 10,
+        "name": "Toni Kroos",
+        "position": "Midfielder",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 11,
+        "name": "Jamal Musiala",
+        "position": "Midfielder",
+        "club_name": "Bayern Munich",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 12,
+        "name": "Florian Wirtz",
+        "position": "Midfielder",
+        "club_name": "Bayer Leverkusen",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 13,
+        "name": "Leon Goretzka",
+        "position": "Midfielder",
+        "club_name": "Bayern Munich",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 14,
+        "name": "Pascal Gross",
+        "position": "Midfielder",
+        "club_name": "Brighton",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 15,
+        "name": "Kai Havertz",
+        "position": "Forward",
+        "club_name": "Arsenal",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 16,
+        "name": "Serge Gnabry",
+        "position": "Forward",
+        "club_name": "Bayern Munich",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 17,
+        "name": "Leroy Sane",
+        "position": "Forward",
+        "club_name": "Bayern Munich",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 18,
+        "name": "Niclas Fullkrug",
+        "position": "Forward",
+        "club_name": "Borussia Dortmund",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 19,
+        "name": "Thomas Muller",
+        "position": "Forward",
+        "club_name": "Bayern Munich",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      },
+      {
+        "player_id": 20,
+        "name": "Deniz Undav",
+        "position": "Forward",
+        "club_name": "Stuttgart",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Germany",
+        "caps": 30
+      }
+    ],
+    "Spain": [
+      {
+        "player_id": 1,
+        "name": "Unai Simon",
+        "position": "Goalkeeper",
+        "club_name": "Athletic Bilbao",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 2,
+        "name": "David Raya",
+        "position": "Goalkeeper",
+        "club_name": "Arsenal",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 3,
+        "name": "Alex Remiro",
+        "position": "Goalkeeper",
+        "club_name": "Real Sociedad",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 4,
+        "name": "Dani Carvajal",
+        "position": "Defender",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 5,
+        "name": "Aymeric Laporte",
+        "position": "Defender",
+        "club_name": "Al Nassr",
+        "league_name": "Saudi Pro League",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 6,
+        "name": "Robin Le Normand",
+        "position": "Defender",
+        "club_name": "Real Sociedad",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 7,
+        "name": "Pau Torres",
+        "position": "Defender",
+        "club_name": "Aston Villa",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 8,
+        "name": "Jose Gaya",
+        "position": "Defender",
+        "club_name": "Valencia",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 9,
+        "name": "Pedri",
+        "position": "Midfielder",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 10,
+        "name": "Rodri",
+        "position": "Midfielder",
+        "club_name": "Manchester City",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 11,
+        "name": "Gavi",
+        "position": "Midfielder",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 12,
+        "name": "Fermin Lopez",
+        "position": "Midfielder",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 13,
+        "name": "Mikel Merino",
+        "position": "Midfielder",
+        "club_name": "Real Sociedad",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 14,
+        "name": "Fabian Ruiz",
+        "position": "Midfielder",
+        "club_name": "Paris Saint Germain",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 15,
+        "name": "Martin Zubimendi",
+        "position": "Midfielder",
+        "club_name": "Real Sociedad",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 16,
+        "name": "Lamine Yamal",
+        "position": "Forward",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 17,
+        "name": "Nico Williams",
+        "position": "Forward",
+        "club_name": "Athletic Bilbao",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 18,
+        "name": "Alvaro Morata",
+        "position": "Forward",
+        "club_name": "Atletico Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 19,
+        "name": "Dani Olmo",
+        "position": "Forward",
+        "club_name": "RB Leipzig",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 20,
+        "name": "Joselu",
+        "position": "Forward",
+        "club_name": "Real Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      },
+      {
+        "player_id": 21,
+        "name": "Ferran Torres",
+        "position": "Forward",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Spain",
+        "caps": 30
+      }
+    ],
+    "Portugal": [
+      {
+        "player_id": 1,
+        "name": "Diogo Costa",
+        "position": "Goalkeeper",
+        "club_name": "Porto",
+        "league_name": "Primeira Liga",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 2,
+        "name": "Jose Sa",
+        "position": "Goalkeeper",
+        "club_name": "Wolves",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 3,
+        "name": "Ruben Dias",
+        "position": "Defender",
+        "club_name": "Manchester City",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 4,
+        "name": "Pepe",
+        "position": "Defender",
+        "club_name": "Porto",
+        "league_name": "Primeira Liga",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 5,
+        "name": "Joao Cancelo",
+        "position": "Defender",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 6,
+        "name": "Nuno Mendes",
+        "position": "Defender",
+        "club_name": "Paris Saint Germain",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 7,
+        "name": "Diogo Dalot",
+        "position": "Defender",
+        "club_name": "Manchester United",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 8,
+        "name": "Goncalo Inacio",
+        "position": "Defender",
+        "club_name": "Sporting CP",
+        "league_name": "Primeira Liga",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 9,
+        "name": "Antonio Silva",
+        "position": "Defender",
+        "club_name": "Benfica",
+        "league_name": "Primeira Liga",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 10,
+        "name": "Bernardo Silva",
+        "position": "Midfielder",
+        "club_name": "Manchester City",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 11,
+        "name": "Bruno Fernandes",
+        "position": "Midfielder",
+        "club_name": "Manchester United",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 12,
+        "name": "Joao Palhinha",
+        "position": "Midfielder",
+        "club_name": "Fulham",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 13,
+        "name": "Vitinha",
+        "position": "Midfielder",
+        "club_name": "Paris Saint Germain",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 14,
+        "name": "Otavio",
+        "position": "Midfielder",
+        "club_name": "Porto",
+        "league_name": "Primeira Liga",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 15,
+        "name": "Matheus Nunes",
+        "position": "Midfielder",
+        "club_name": "Manchester City",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 16,
+        "name": "Cristiano Ronaldo",
+        "position": "Forward",
+        "club_name": "Al Nassr",
+        "league_name": "Saudi Pro League",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 17,
+        "name": "Joao Felix",
+        "position": "Forward",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 18,
+        "name": "Rafael Leao",
+        "position": "Forward",
+        "club_name": "AC Milan",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 19,
+        "name": "Diogo Jota",
+        "position": "Forward",
+        "club_name": "Liverpool",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 20,
+        "name": "Goncalo Ramos",
+        "position": "Forward",
+        "club_name": "Paris Saint Germain",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      },
+      {
+        "player_id": 21,
+        "name": "Pedro Neto",
+        "position": "Forward",
+        "club_name": "Wolves",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Portugal",
+        "caps": 30
+      }
+    ],
+    "Netherlands": [
+      {
+        "player_id": 1,
+        "name": "Justin Bijlow",
+        "position": "Goalkeeper",
+        "club_name": "Feyenoord",
+        "league_name": "Eredivisie",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 2,
+        "name": "Mark Flekken",
+        "position": "Goalkeeper",
+        "club_name": "Brentford",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 3,
+        "name": "Virgil van Dijk",
+        "position": "Defender",
+        "club_name": "Liverpool",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 4,
+        "name": "Matthijs de Ligt",
+        "position": "Defender",
+        "club_name": "Bayern Munich",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 5,
+        "name": "Nathan Ake",
+        "position": "Defender",
+        "club_name": "Manchester City",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 6,
+        "name": "Denzel Dumfries",
+        "position": "Defender",
+        "club_name": "Inter Milan",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 7,
+        "name": "Daley Blind",
+        "position": "Defender",
+        "club_name": "Girona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 8,
+        "name": "Jurrien Timber",
+        "position": "Defender",
+        "club_name": "Arsenal",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 9,
+        "name": "Frenkie de Jong",
+        "position": "Midfielder",
+        "club_name": "Barcelona",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 10,
+        "name": "Marten de Roon",
+        "position": "Midfielder",
+        "club_name": "Atalanta",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 11,
+        "name": "Tijjani Reijnders",
+        "position": "Midfielder",
+        "club_name": "AC Milan",
+        "league_name": "Serie A",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 12,
+        "name": "Joey Veerman",
+        "position": "Midfielder",
+        "club_name": "PSV",
+        "league_name": "Eredivisie",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 13,
+        "name": "Xavi Simons",
+        "position": "Midfielder",
+        "club_name": "RB Leipzig",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 14,
+        "name": "Memphis Depay",
+        "position": "Forward",
+        "club_name": "Atletico Madrid",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 15,
+        "name": "Cody Gakpo",
+        "position": "Forward",
+        "club_name": "Liverpool",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 16,
+        "name": "Donyell Malen",
+        "position": "Forward",
+        "club_name": "Borussia Dortmund",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 17,
+        "name": "Wout Weghorst",
+        "position": "Forward",
+        "club_name": "Burnley",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 18,
+        "name": "Steven Bergwijn",
+        "position": "Forward",
+        "club_name": "Ajax",
+        "league_name": "Eredivisie",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      },
+      {
+        "player_id": 19,
+        "name": "Brian Brobbey",
+        "position": "Forward",
+        "club_name": "Ajax",
+        "league_name": "Eredivisie",
+        "age": 26,
+        "nationality": "Netherlands",
+        "caps": 30
+      }
+    ],
+    "Japan": [
+      {
+        "player_id": 1,
+        "name": "Shuichi Gonda",
+        "position": "Goalkeeper",
+        "club_name": "Shimizu S-Pulse",
+        "league_name": "J1 League",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 2,
+        "name": "Kosei Tani",
+        "position": "Goalkeeper",
+        "club_name": "Gamba Osaka",
+        "league_name": "J1 League",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 3,
+        "name": "Takehiro Tomiyasu",
+        "position": "Defender",
+        "club_name": "Arsenal",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 4,
+        "name": "Ko Itakura",
+        "position": "Defender",
+        "club_name": "Borussia Monchengladbach",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 5,
+        "name": "Hiroki Ito",
+        "position": "Defender",
+        "club_name": "Stuttgart",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 6,
+        "name": "Yuta Nakayama",
+        "position": "Defender",
+        "club_name": "Huddersfield",
+        "league_name": "Championship",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 7,
+        "name": "Shogo Taniguchi",
+        "position": "Defender",
+        "club_name": "Al Rayyan",
+        "league_name": "Qatar Stars League",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 8,
+        "name": "Wataru Endo",
+        "position": "Midfielder",
+        "club_name": "Liverpool",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 9,
+        "name": "Hidemasa Morita",
+        "position": "Midfielder",
+        "club_name": "Sporting CP",
+        "league_name": "Primeira Liga",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 10,
+        "name": "Ao Tanaka",
+        "position": "Midfielder",
+        "club_name": "Fortuna Dusseldorf",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 11,
+        "name": "Daichi Kamada",
+        "position": "Midfielder",
+        "club_name": "Crystal Palace",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 12,
+        "name": "Junya Ito",
+        "position": "Midfielder",
+        "club_name": "Stade Reims",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 13,
+        "name": "Ritsu Doan",
+        "position": "Midfielder",
+        "club_name": "Freiburg",
+        "league_name": "Bundesliga",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 14,
+        "name": "Takefusa Kubo",
+        "position": "Forward",
+        "club_name": "Real Sociedad",
+        "league_name": "La Liga",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 15,
+        "name": "Kaoru Mitoma",
+        "position": "Forward",
+        "club_name": "Brighton",
+        "league_name": "Premier League",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 16,
+        "name": "Ayase Ueda",
+        "position": "Forward",
+        "club_name": "Feyenoord",
+        "league_name": "Eredivisie",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 17,
+        "name": "Kyogo Furuhashi",
+        "position": "Forward",
+        "club_name": "Celtic",
+        "league_name": "Scottish Premiership",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 18,
+        "name": "Takumi Minamino",
+        "position": "Forward",
+        "club_name": "Monaco",
+        "league_name": "Ligue 1",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      },
+      {
+        "player_id": 19,
+        "name": "Yuki Soma",
+        "position": "Forward",
+        "club_name": "Nagoya Grampus",
+        "league_name": "J1 League",
+        "age": 26,
+        "nationality": "Japan",
+        "caps": 30
+      }
+    ]
+  },
+  "notes": "Player data will be enriched by ApiFootballClient.get_squad() and get_players(). This template provides known star players; full 26-man squads will come from API."
+}

@@ -1,0 +1,4 @@
+# 2026 世界杯预测系统 - Web App
+# 零外部依赖 - 仅使用 Python 3.8+ 标准库
+# 无需 pip install 任何包。直接运行：
+#   python web_app/server.py
